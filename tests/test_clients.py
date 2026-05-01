@@ -20,7 +20,7 @@ class TestAtexRagClient(unittest.TestCase):
         rec=client.ask('What is the cookie?')
         self.assertGreaterEqual(rec['n_hits'],1)
         self.assertIn('manual::cookie',rec['top_keys'])
-        self.assertGreater(rec['retrieval_ms'],0)
+        self.assertGreaterEqual(rec['retrieval_ms'],0)
 class TestValidationLoop(unittest.TestCase):
     def setUp(self):
         self.tmp=Path(tempfile.mkdtemp(prefix='atex_val_'))

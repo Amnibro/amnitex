@@ -19,14 +19,14 @@ class AtexRagClient:
         if not context:return f'Question: {question}\nAnswer concisely:'
         return f'{context}\n\nUsing only the references above (and prior knowledge if they are silent), answer concisely.\n\nQuestion: {question}\nAnswer:'
     def ask(self,question:str,k:Optional[int]=None)->Dict:
-        t0=time.time()
+        t0=time.perf_counter()
         results=self.retr.retrieve(question,k=k or self.k,max_chars_per=self.max_chars_per)
-        retr_ms=(time.time()-t0)*1000
+        retr_ms=(time.perf_counter()-t0)*1000
         ctx=self.retr.format_as_context(results) if results else ''
         prompt=self._build_prompt(question,ctx)
-        t1=time.time()
+        t1=time.perf_counter()
         answer=self.chat(prompt)
-        chat_ms=(time.time()-t1)*1000
+        chat_ms=(time.perf_counter()-t1)*1000
         rec={'question':question,'n_hits':len(results),'top_keys':[r[0] for r in results],'retrieval_ms':round(retr_ms,2),'chat_ms':round(chat_ms,1),'total_ms':round(retr_ms+chat_ms,1),'answer':answer}
         self._calls.append(rec)
         return rec
