@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.1.1] — 2026-05-01
+
+- Fix `pyproject.toml` URLs to point at `Amnibro/amnitex` (the actual GitHub repo); `Amnibro/atex` was a stale placeholder.
+- Add `Changelog` URL to project metadata.
+
 ## [0.1.0] — 2026-05-01 (initial public release)
 
 ### Added

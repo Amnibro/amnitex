@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "amnitex"
-version = "0.1.0"
+version = "0.1.1"
 description = "atex (amni-tex): a lossless byte-page memory layer for MCP-capable AI coding assistants. Local, no embeddings, no cloud."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -35,9 +35,10 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/Amnibro/atex"
-Repository = "https://github.com/Amnibro/atex"
-Issues = "https://github.com/Amnibro/atex/issues"
+Homepage = "https://github.com/Amnibro/amnitex"
+Repository = "https://github.com/Amnibro/amnitex"
+Issues = "https://github.com/Amnibro/amnitex/issues"
+Changelog = "https://github.com/Amnibro/amnitex/blob/main/CHANGELOG.md"
 
 [project.scripts]
 atex = "atex.cli:main"

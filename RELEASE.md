@@ -38,7 +38,7 @@ git init
 git add -A
 git status   # sanity check — should NOT include .atex/ or .atex_metrics.jsonl (gitignored)
 git -c user.name=Amnibro -c user.email=99765883+Amnibro@users.noreply.github.com commit -m "atex v0.1.0 - initial public release"
-gh repo create Amnibro/atex --public --source=. --remote=origin --push --description "Lossless byte-page memory layer for MCP-capable AI coding assistants"
+gh repo create Amnibro/amnitex --public --source=. --remote=origin --push --description "Lossless byte-page memory layer for MCP-capable AI coding assistants"
 ```
 
 GitHub Actions CI should fire automatically on push. Watch the Actions tab — expect green across Win/Mac/Linux × py3.10/3.11/3.12.
@@ -97,12 +97,12 @@ cd mcp-servers-fork
 # add an entry to README.md under "Community Servers" with:
 #   ### atex
 #   A lossless byte-page memory layer. Local, no embeddings, no cloud. MIT.
-#   - Repo: https://github.com/Amnibro/atex
+#   - Repo: https://github.com/Amnibro/amnitex
 #   - PyPI: https://pypi.org/project/atex
 git -c user.name=Amnibro -c user.email=99765883+Amnibro@users.noreply.github.com checkout -b add-atex
 git -c user.name=Amnibro -c user.email=99765883+Amnibro@users.noreply.github.com commit -am "add atex - lossless byte-page memory layer"
 git push -u origin add-atex
-gh pr create --title "Add atex memory server" --body "Adds atex (https://github.com/Amnibro/atex) to the Community Servers list. Lossless byte-page key-value store, MCP-native, no embeddings, MIT-licensed."
+gh pr create --title "Add atex memory server" --body "Adds atex (https://github.com/Amnibro/amnitex) to the Community Servers list. Lossless byte-page key-value store, MCP-native, no embeddings, MIT-licensed."
 ```
 
 ## Step 6 — Show HN post (~10 min)
@@ -135,7 +135,7 @@ hits across 7 build iterations. The bench harness caught a real correctness bug 
 retriever (key-first short-circuit suppressing text scores) — fix lifted recall@1 by 25
 percentage points. Whole DOGFOOD.md is in the repo.
 
-Repo: https://github.com/Amnibro/atex
+Repo: https://github.com/Amnibro/amnitex
 PyPI: pipx install atex
 Paper: https://arxiv.org/abs/<id-once-live>
 
@@ -156,7 +156,7 @@ Body: emphasize the "works with any local model, no embedding step, MIT" angle. 
 
 Demo GIF + one-liner + repo link:
 
-> Built `atex` — a lossless local memory layer for AI coding assistants over MCP. 95% recall@1, validated with a 0.5B local model on commodity hardware. MIT, stdlib-only, no embeddings. github.com/Amnibro/atex
+> Built `atex` — a lossless local memory layer for AI coding assistants over MCP. 95% recall@1, validated with a 0.5B local model on commodity hardware. MIT, stdlib-only, no embeddings. github.com/Amnibro/amnitex
 >
 > [GIF: terminal showing `atex demo --model qwen2.5:0.5b-instruct` returning 4/4 PASS]
 
@@ -176,6 +176,6 @@ Tag @AnthropicAI for visibility into the MCP ecosystem.
 
 ## After launch
 
-- Watch issues at github.com/Amnibro/atex/issues
+- Watch issues at github.com/Amnibro/amnitex/issues
 - The dogfood `.atex_metrics.jsonl` log keeps accumulating — at v0.2 cadence (a few weeks), publish a follow-up post with cumulative numbers
 - v0.2 priority list (in order): tombstone/delete operation, BM25 / TF-IDF length-normalized scoring, file-watch daemon (`atex watch`), embedding sidecar (optional)

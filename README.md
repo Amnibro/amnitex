@@ -83,7 +83,7 @@ Lossless byte-page key-value store. Pages are mem-mappable; the index is JSON. N
 ## Reproducibility
 
 ```bash
-git clone https://github.com/Amnibro/atex
+git clone https://github.com/Amnibro/amnitex
 cd atex
 pip install -e ".[dev]"
 pytest                                                    # 31 tests pass in ~6 s
@@ -113,4 +113,4 @@ MIT — see [LICENSE](LICENSE).
 
 ## Contributing
 
-Issues and PRs welcome at [github.com/Amnibro/atex](https://github.com/Amnibro/atex). See [DOGFOOD.md](DOGFOOD.md) for the case study of using atex while building atex (19/19 search hits, 18/18 recall hits across the build).
+Issues and PRs welcome at [github.com/Amnibro/amnitex](https://github.com/Amnibro/amnitex). See [DOGFOOD.md](DOGFOOD.md) for the case study of using atex while building atex (19/19 search hits, 18/18 recall hits across the build).
