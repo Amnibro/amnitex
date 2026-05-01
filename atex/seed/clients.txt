@@ -1,0 +1,41 @@
+Supported MCP-capable AI clients.
+
+Claude Desktop (Anthropic):
+  config: macOS  ~/Library/Application Support/Claude/claude_desktop_config.json
+  config: Windows %APPDATA%\Claude\claude_desktop_config.json
+  auto-wirable: yes (atex demo handles it)
+  restart required after wiring: yes
+
+Claude Code (Anthropic CLI):
+  config: ~/.claude.json
+  auto-wirable: yes
+  restart required after wiring: yes (close and reopen claude)
+
+Cursor (cursor.sh):
+  config: configured via UI, not a single file path
+  auto-wirable: no — paste the snippet from "atex demo" output into
+                Settings > MCP > Add Custom Server
+  restart required after wiring: yes
+
+Cline (VS Code extension by saoudrizwan):
+  config: <user-globalStorage>/saoudrizwan.claude-dev/settings/cline_mcp_settings.json
+  auto-wirable: yes (atex demo handles it on Windows / macOS / Linux)
+  restart required after wiring: reload VS Code window
+
+Continue (VS Code or JetBrains extension):
+  config: ~/.continue/config.json
+  auto-wirable: yes
+  restart required after wiring: reload Continue
+
+Zed:
+  config: ~/.config/zed/settings.json (Linux/macOS), %APPDATA%\Zed\settings.json (Windows)
+  auto-wirable: yes (writes context_servers entry)
+  restart required after wiring: yes
+
+Any other MCP client:
+  All MCP clients accept this server-block shape:
+    {
+      "command": "<absolute-path-to-python-or-pipx-shim>",
+      "args": ["-m","atex.cli","serve","--atex-dir","<absolute-path-to-.atex>"]
+    }
+  Drop that into your client's MCP server registry and restart.

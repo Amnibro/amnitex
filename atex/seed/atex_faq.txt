@@ -1,0 +1,43 @@
+atex frequently asked questions.
+
+Q: Is my data uploaded anywhere?
+A: No. atex is local-only. The KB lives in a .atex/ directory in your project
+   root. Nothing is sent over the network. There is no telemetry.
+
+Q: How does atex compare to mem0 or basic-memory?
+A: All three are local memory layers. mem0 builds graphs and supports semantic
+   search; basic-memory uses markdown files. atex is a byte-page key-value
+   store with mmap reads, no embedding step, and a 5-tool MCP surface. atex
+   is fastest for exact recall and lookup-by-prefix; mem0 is more flexible for
+   semantic queries but requires an embedding model.
+
+Q: Does atex require an embedding model?
+A: No. The default retriever is keyword overlap (TF-style scoring on tokenized
+   query text), which is fast and has no external dependencies. Embedding-
+   augmented retrieval is on the roadmap as an optional add-on.
+
+Q: How big is the KB?
+A: One page is 1 MiB by default. The KB grows page by page as you ingest. A
+   typical project of 200 source files indexes to 2 to 5 MiB. The page index
+   in JSON is a few KB. Use "atex stats" to inspect.
+
+Q: How do I share KB content with teammates?
+A: User-taught entries (those written via atex_remember) live in
+   .atex/manual/ and are kept in git by default. The auto-generated source
+   index in .atex/pages/ and .atex/index.json are gitignored as regenerable.
+
+Q: Can I use atex with local open-source models like Qwen or Llama?
+A: Yes. atex is model-agnostic. Any MCP-capable client works. For local
+   models, point your MCP-aware client (for example Claude Code with a local
+   provider) at the atex MCP server and the tool calls flow through.
+
+Q: Is atex compatible with Windows / macOS / Linux?
+A: Yes. The package is pure Python with stdlib-only dependencies. Tested on
+   Windows 11, macOS 14+, and Ubuntu 22.04+ with Python 3.10 through 3.12.
+
+Q: What MCP protocol version does atex speak?
+A: 2024-11-05. JSON-RPC 2.0 over stdio (line-delimited).
+
+Q: How do I refresh the KB after editing source files?
+A: Run "atex init --reingest" from the project root. A file-watch daemon is
+   on the roadmap.

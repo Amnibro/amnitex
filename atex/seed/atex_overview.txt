@@ -1,0 +1,26 @@
+What is atex?
+
+atex is a lossless byte-page memory layer for AI coding assistants. It stores
+project knowledge in a local key-value store and exposes it over the Model
+Context Protocol (MCP) so any MCP-capable AI client (Claude Code, Claude
+Desktop, Cursor, Cline, Continue, Zed, and others) can search, recall, and
+remember mid-conversation.
+
+Once configured, your AI assistant can call:
+  atex_search(query, k)        — retrieve top-k entries for a natural-language query
+  atex_recall(key)             — exact-key lookup
+  atex_remember(key, text)     — persist a user-taught fact across sessions
+  atex_list_keys(prefix, max)  — discover what is known about an area
+  atex_stats()                 — inspect KB size and fill
+
+Why it differs from other memory layers:
+  - Local-only: nothing is uploaded anywhere
+  - Lossless exact recall: no embedding step, no approximate matching
+  - No model dependency: works with any AI client, any model
+  - Multi-AI-client (MCP): one KB serves Claude, GPT, local Llama, Qwen, etc.
+  - Free: MIT license, zero cost
+  - Setup time: about ten seconds via "atex init"
+
+The storage format is a sequence of mem-mappable byte pages plus a JSON address
+index. Page geometry defaults to 4096 by 64 by 4 bytes (1 MiB per page) and is
+configurable via ATEX_PAGE_W / ATEX_PAGE_H environment variables.

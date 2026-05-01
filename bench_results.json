@@ -1,0 +1,32 @@
+[
+  {
+    "name": "atex",
+    "ingest_n": 20,
+    "ingest_wall_s": 0.1628,
+    "ingest_throughput_entries_per_s": 122.9,
+    "recall_at_1": 0.95,
+    "recall_at_3": 1.0,
+    "recall_at_5": 1.0,
+    "avg_query_ms": 0.476,
+    "p50_query_ms": 0.0,
+    "p99_query_ms": 8.513,
+    "cold_start_ms": 2.01,
+    "n_queries": 20,
+    "errors": []
+  },
+  {
+    "name": "naive-substring-scan",
+    "ingest_n": 20,
+    "ingest_wall_s": 0.0,
+    "ingest_throughput_entries_per_s": 1000000000.0,
+    "recall_at_1": 0.9,
+    "recall_at_3": 0.95,
+    "recall_at_5": 0.95,
+    "avg_query_ms": 0.0,
+    "p50_query_ms": 0.0,
+    "p99_query_ms": 0.0,
+    "cold_start_ms": 0.0,
+    "n_queries": 20,
+    "errors": []
+  }
+]

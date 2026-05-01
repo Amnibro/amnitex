@@ -1,0 +1,40 @@
+atex install and first-run guide.
+
+Install with pipx (recommended) or pip:
+  pipx install atex
+  pip install atex
+
+Initialize a knowledge base in your project:
+  cd /path/to/your/project
+  atex init
+
+This creates:
+  .atex/index.json         — entry address index (gitignored, regenerable)
+  .atex/pages/             — byte pages (gitignored, regenerable)
+  .atex/manual/            — user-taught facts (kept in git)
+  .atex/config.json        — project config (kept in git)
+
+Auto-wire your MCP client (Claude Desktop, Claude Code, Cline, Continue, Zed):
+  atex demo
+
+This detects which clients you have installed and offers to write the atex
+server entry into each client's config (with [y/N] consent and an automatic
+backup of the prior config to <config>.atex-backup-<unix-timestamp>).
+
+Cursor users: configure atex via Settings > MCP > Add Custom Server. The
+command is "atex" and the args are ["serve","--atex-dir","<absolute-path>"].
+
+After wiring, restart your AI client. The atex_search, atex_recall,
+atex_remember, atex_list_keys, atex_stats tools become available.
+
+To inspect the KB:
+  atex stats --atex-dir .atex
+
+To rebuild from scratch (drops indexed sources, keeps manual/ and config.json):
+  atex init --reingest
+
+For benchmarking against other memory layers:
+  atex bench
+
+For help on any command:
+  atex <command> --help

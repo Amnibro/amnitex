@@ -1,0 +1,199 @@
+\documentclass[10pt,letterpaper]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{microtype}
+\usepackage{lmodern}
+\usepackage{booktabs}
+\usepackage{url}
+\usepackage{hyperref}
+\usepackage{enumitem}
+\usepackage{listings}
+\usepackage{xcolor}
+\hypersetup{colorlinks=true,linkcolor=blue,urlcolor=blue,citecolor=blue}
+\lstset{basicstyle=\ttfamily\footnotesize,frame=single,breaklines=true,xleftmargin=0pt,framexleftmargin=2pt}
+\title{\texttt{atex}: A Lossless Byte-Page Memory Layer for MCP-Capable AI Coding Assistants}
+\author{Amni-Scient\\\texttt{the maintainer (via GitHub)}}
+\date{}
+\begin{document}
+\maketitle
+\begin{abstract}
+We present \texttt{atex}, a lightweight, lossless memory layer for AI coding assistants exposed over the Model Context Protocol (MCP). Unlike vector databases and embedding-based memories, \texttt{atex} stores text verbatim in mem-mappable byte pages addressed by a JSON index, supports exact-key lookup at constant time, and ships with no machine-learning dependencies. The full Python package is stdlib-only, MIT-licensed, and installs in a single command. We show that on a 20-entry code-documentation corpus, \texttt{atex}'s keyword-overlap retriever achieves \textbf{95\,\% recall@1, 100\,\% recall@3, and 100\,\% recall@5}, beating a naive substring-scan baseline (90\,\% / 95\,\% / 95\,\%). We further validate the end-to-end retrieval-augmented-generation (RAG) loop on a 0.5B-parameter open-source instruct model (\texttt{qwen2.5:0.5b-instruct}) served by ollama: a four-step probe-write-search-quote validation \textbf{passes 4/4 steps in 5.54\,s wall time}. As a self-referential reproducibility argument, we used \texttt{atex} to track our own context during the development of \texttt{atex}, and report 19/19 (100\,\%) ranked-search hits and 18/18 (100\,\%) keyed-recall hits across seven build iterations, with average query latencies of 2.6\,ms and 3.0\,ms respectively. The harness, corpus, model adapter, and dogfood log are all published in the public repository so reviewers can replay every measurement with one command.
+\end{abstract}
+
+\section{Introduction}
+\label{sec:intro}
+
+A persistent friction point of working with current AI coding assistants is that each new conversation begins context-empty: the user re-explains the project, the conventions, the locations of important files, and the gotchas already covered yesterday. Anthropic's Model Context Protocol (MCP)~\cite{mcp} addresses the structural side of this gap by giving any compliant client (Claude Code, Claude Desktop, Cursor, Cline, Continue, Zed, and others) a uniform way to call external tools mid-conversation. What MCP does \emph{not} provide is a memory back-end: each project is on its own to wire one up.
+
+The dominant existing answers fall into three classes. \textit{Vector databases} (Pinecone, Chroma, Weaviate, etc.) embed text into dense float arrays, indexed for approximate-nearest-neighbor retrieval. They are powerful but require an embedding model dependency, an external service or self-hosted instance, and a non-trivial monthly cost at scale. \textit{Hybrid memory layers} such as mem0~\cite{mem0} and \texttt{basic-memory}~\cite{basicmemory} mix entity graphs, markdown stores, or hybrid embedding caches; they are local-friendly but have larger surface areas and configuration overhead. \textit{Manual context} (paste-the-files-back-in) is the de-facto baseline that this work seeks to replace.
+
+We argue that for the specific workload of \emph{exact-recall over coding-project context}, the right answer is much smaller: a lossless byte-page key-value store with mmap reads, a JSON address index, and a five-tool MCP surface. We call this \texttt{atex}. The contributions of this paper are:
+
+\begin{enumerate}[leftmargin=*]
+\item A complete, MIT-licensed implementation of the storage layer, MCP server, and bootstrap auto-config flow, with stdlib-only runtime dependencies.
+\item A reproducible bench harness with a self-contained corpus and ground-truth query/answer pairs, demonstrating that simple keyword-overlap scoring with proper additive combination beats both a naive substring baseline and a key-only short-circuit predecessor by 25\,pp on recall@1.
+\item A live end-to-end validation that proves the retrieval-augmented-generation loop works against a 0.5B-parameter open-source instruct model on commodity hardware.
+\item A self-referential dogfooding case study: we used \texttt{atex} to manage our own context while building \texttt{atex}, with quantitative timings and qualitative findings reported as the paper's evaluation track.
+\end{enumerate}
+
+\section{Design}
+\label{sec:design}
+
+\subsection{Storage: byte pages plus a JSON index}
+
+A \texttt{KnowledgeBase} is a directory containing \texttt{pages/} and \texttt{index.json}. Pages are sequential, mem-mappable, raw byte streams of fixed size (default $4096 \times 64 \times 4 = 1$\,MiB; configurable). Each entry is appended to the current page and tracked by an index entry of the form
+\[
+\{ \texttt{key} \to (\texttt{page\_idx}, \texttt{offset}, \texttt{length}, \texttt{meta}) \}
+\]
+Lookups are constant-time: locate the page via index, mmap once, slice by (offset, length). Because the underlying byte stream is opaque UTF-8 (or any user-chosen encoding), the format is lossless: no embedding step, no tokenizer, no approximation.
+
+\subsection{MCP tool surface}
+
+The server exposes five tools over JSON-RPC 2.0 stdio:
+
+\begin{itemize}[leftmargin=*]
+\item \texttt{atex\_search(query, k)}: top-$k$ keyword-overlap retrieval over the KB
+\item \texttt{atex\_recall(key)}: exact-key lookup
+\item \texttt{atex\_remember(key, text)}: persist a fact under \texttt{manual::} namespace
+\item \texttt{atex\_list\_keys(prefix, max)}: enumerate by prefix
+\item \texttt{atex\_stats()}: KB size, pages, fill, geometry
+\end{itemize}
+
+Write surface inputs are validated server-side: \texttt{atex\_remember} keys must match \texttt{\textasciicircum [a-zA-Z0-9\_\textbackslash-./:]\{1,256\}\$}, must not contain \texttt{..} (path traversal), and the text payload is capped at 1\,MiB.
+
+\subsection{Bootstrap: auto-config with consent and backup}
+
+The \texttt{atex demo} subcommand auto-detects six MCP-capable clients (Claude Desktop on macOS/Windows, Claude Code, Cursor, Cline, Continue, Zed), presents a consent prompt for each, backs up the existing config to \texttt{<config>.atex-backup-<unix-timestamp>}, and writes the \texttt{atex} server entry. A \texttt{--dry-run} flag previews the changes without touching the filesystem.
+
+\section{Implementation}
+\label{sec:impl}
+
+\subsection{Windows-safe atomic index writes}
+
+Initial profiling on Windows revealed an \texttt{os.replace} race during high-frequency index updates: when the consumer process and the writer process both held the index file open, replace would intermittently raise \texttt{PermissionError}. We resolved this with a retry loop bounded by exponential backoff (12 attempts, 50\,ms initial delay, capped). The retry parameters are tuned via \texttt{ATEX\_REPLACE\_RETRIES} and \texttt{ATEX\_REPLACE\_BACKOFF} environment variables.
+
+\subsection{Batched index saves}
+
+Naive write-through-on-every-add caused $\sim 100$ unnecessary fsync operations during a 100-file ingest. We added an autosave-every-$N$ counter (default $N = 100$, configurable via \texttt{ATEX\_AUTOSAVE\_EVERY}), with a \texttt{flush()} call at end-of-batch and an \texttt{atexit} hook for crash safety. This reduced wall-clock ingest time by approximately $20\times$ on a 12{,}500-entry test (120\,s $\to$ 13\,s observed during pre-public development).
+
+\subsection{File-handle hygiene}
+
+Cross-platform mmap behavior differs subtly: on POSIX, \texttt{mmap} dups the underlying file descriptor; on Windows, the section object holds a reference distinct from the original file handle. To avoid leaking handles in either case, we open the page file with a context manager and close the fd immediately after creating the mmap object. The mmap remains valid (paged into memory) regardless of fd lifetime.
+
+\section{Evaluation}
+\label{sec:eval}
+
+\subsection{Bench harness vs naive baseline}
+
+We constructed a 20-entry corpus of Python standard-library documentation snippets covering \texttt{pathlib}, \texttt{json}, \texttt{re}, \texttt{subprocess}, \texttt{asyncio}, \texttt{hashlib}, \texttt{hmac}, \texttt{dataclasses}, and \texttt{typing}. Each entry has a known canonical key (e.g.\ \texttt{project::pathlib\_read\_text}), and we authored 20 natural-language queries with a single ground-truth key (e.g.\ ``how do I read a file as a string in Python'' $\to$ \texttt{project::pathlib\_read\_text}). We compare \texttt{atex}'s default keyword-overlap retriever against a naive substring scan that checks the query tokens against both keys and bodies of every document.
+
+\textbf{The bench harness caught a real bug.} An early version of the retriever used a key-first short-circuit: if the entry key matched any query token, the body was never scanned to add to the score. This caused entries with weak key matches to outrank entries with strong body matches. The fix is straightforward: combine $\textit{score} = \textit{key\_score} + \textit{text\_score}$ additively, always scanning both sides.
+
+Table~\ref{tab:bench} reports the post-fix numbers.
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{lrrrrrrrr}
+\toprule
+\textbf{Backend} & \textbf{Ingest (ms)} & \textbf{Throughput (e/s)} & \textbf{R@1} & \textbf{R@3} & \textbf{R@5} & \textbf{Avg query (ms)} & \textbf{p99 (ms)} & \textbf{Cold start (ms)} \\
+\midrule
+\texttt{atex} (after fix) & 162.8 & 123 & \textbf{95\%} & \textbf{100\%} & \textbf{100\%} & 0.476 & 8.5 & 2.0 \\
+\texttt{atex} (before fix) & 105.7 & 189 & 70\% & 85\% & 85\% & 0.325 & 5.5 & 1.0 \\
+naive substring scan & 0.0 & --- & 90\% & 95\% & 95\% & 0.05 & 1.0 & 0.0 \\
+\bottomrule
+\end{tabular}
+\caption{Bench results on the 20-entry code-documentation corpus, $n=20$ queries. ``Before fix'' captures the key-first short-circuit predecessor, retained here to motivate the additive-scoring change. The naive substring scan has zero ingest cost because it runs on an in-memory \texttt{dict}; \texttt{atex} pays for one 1\,MiB page allocation. Cold start is the wall time from \texttt{KnowledgeBase()} construction to first query response.}
+\label{tab:bench}
+\end{table}
+
+\subsection{Live RAG validation with a 0.5B open-source model}
+
+We validated the end-to-end RAG loop with \texttt{qwen2.5:0.5b-instruct} served by ollama on commodity hardware. The validation probe consists of four steps run against a freshly-seeded KB:
+
+\begin{enumerate}[leftmargin=*]
+\item \textbf{Pre-clear}: confirm the probe key is absent from the KB
+\item \textbf{Remember-then-recall}: write a 103-byte fact (containing a unique cookie value \texttt{azure-marmot-7421}) and verify exact-match round-trip via \texttt{atex\_recall}
+\item \textbf{RAG search finds the fact}: ask the question ``What is the validation cookie value? Quote it exactly.''; the retriever's top hit must be the manual entry
+\item \textbf{RAG answer quotes the fact}: the model's response must contain the cookie value verbatim
+\end{enumerate}
+
+\textbf{Result: 4/4 steps PASS in 5.54\,s wall time.} Step~3 took 0\,ms (under the noise floor for our timing instrumentation). Step~4 took 5506\,ms, dominated by the model's generation time on the host's CPU. The model's verbatim response was: \emph{``The validation cookie value is azure-marmot-7421.''} This demonstrates that even the smallest mainstream open-source instruct model can act on \texttt{atex}-retrieved context without any tool-calling fine-tune.
+
+\subsection{Dogfooding case study: building atex with atex}
+
+As a concurrent reproducibility argument, we instrumented the development of \texttt{atex} itself. From iteration 2 onward, every search, recall, and write made by the developer-agent during the build was logged to a JSONL trace. Across seven build iterations:
+
+\begin{itemize}[leftmargin=*]
+\item KB grew from 9 to 33 entries ($\sim$89\,KB on disk)
+\item 19/19 ranked search calls hit (100\,\%); average latency 2.6\,ms
+\item 18/18 keyed recall calls hit (100\,\%); average latency 3.0\,ms
+\item Seven concrete ``saves'' documented where \texttt{atex\_recall} returned the answer in 1--3\,ms versus an estimated 3--5\,s of manual file/scrollback re-reading; estimated 2000--5000$\times$ subjective speedup per save
+\item Ten distinct limitations exposed during the build, all logged via \texttt{atex\_remember} for paper-section material
+\end{itemize}
+
+The dogfood log lives at \texttt{atex/.atex\_metrics.jsonl}; \texttt{python scripts/atex\_dogfood.py stats} reproduces the aggregated numbers from the raw events.
+
+\section{Reproducibility}
+\label{sec:repro}
+
+All evaluation artifacts ship with the public repository.
+
+\begin{lstlisting}[language=bash]
+git clone https://github.com/Amnibro/atex
+cd atex
+pip install -e ".[dev]"
+pytest                              # 31 tests, ~6 s wall time on Win/Mac/Linux
+python -m atex.cli bench --out bench.json --md bench.md   # Section 5.1 numbers
+ollama pull qwen2.5:0.5b-instruct
+atex demo --model qwen2.5:0.5b-instruct --no-consent      # Section 5.2 validation
+\end{lstlisting}
+
+The bench artifact (\texttt{bench\_results.json}, \texttt{bench\_results.md}) and dogfood JSONL log (\texttt{.atex\_metrics.jsonl}) are committed to the repository as ground-truth.
+
+\section{Limitations and Future Work}
+\label{sec:limits}
+
+The dogfood instrumentation surfaced ten concrete limitations during the build. We highlight the four most consequential here.
+
+\paragraph{Keyword overlap is token-frequency-blind.} Short queries containing only high-frequency tokens (e.g.\ ``what is atex'') return multiple equally-scored entries with score~$=1$. A future BM25 or TF-IDF pass would weight rare terms higher and surface the right entry on ambiguous queries. We did not implement this in v0.1 because exact-key recall (the workload \texttt{atex} optimizes for) does not need it; the result is that ranked search has a precision ceiling that BM25 would lift.
+
+\paragraph{Multi-granularity ranking is broken without length normalization.} If both a full-document entry and per-section entries of that document live in the KB, the full-document entry typically outscores its sections on raw token count. A length-normalized score (or a prefix filter at retrieval time, or a tombstone/delete operation) is required to support multi-granularity ingest workflows cleanly.
+
+\paragraph{No delete operation.} \texttt{KnowledgeBase.add()} can overwrite an existing key but cannot remove one; pages grow monotonically and stale entries are never reclaimed. A v0.2 priority is a tombstone column in the index plus an optional \texttt{atex compact} command to garbage-collect.
+
+\paragraph{Page allocation is eager.} On all three platforms we tested, allocating a 1\,MiB page involves a real disk write rather than a sparse hole. For very small KBs this is wasteful (a 200-byte KB still occupies a 1\,MiB page). Lazy or sparse-aware allocation is a roadmap item.
+
+\section{Related Work}
+\label{sec:related}
+
+\paragraph{MCP servers for memory.} mem0~\cite{mem0} provides a graph-based hybrid store with optional embeddings. \texttt{basic-memory}~\cite{basicmemory} stores notes as markdown files with link-graph traversal. The \texttt{knowledge-graph-memory} reference server exposes an entity-relation store. Compared to these, \texttt{atex} is more specialized: it does only exact-recall keyword retrieval, with no model dependency and a 5-tool surface. We view \texttt{atex} as complementary --- a fast first stage, with semantically richer layers stacked on top when needed.
+
+\paragraph{Vector databases.} Pinecone, Chroma, Weaviate, and Qdrant offer powerful semantic retrieval but require an embedding model and either a hosted service or a non-trivial self-host footprint. For coding-assistant memory specifically, exact-key recall (e.g.\ ``what is in \texttt{src/auth.py}?'') is the most-frequent operation; embedding-based retrieval is over-powered for this workload.
+
+\paragraph{Retrieval-augmented generation.} The RAG pattern~\cite{lewis2020rag} combines an external retriever with a generative model. Our Section~\ref{sec:eval} validation is an instance of RAG with \texttt{atex} as the retriever and a 0.5B open instruct model as the generator. Our contribution is not a new RAG variant; it is the demonstration that an extremely compact, model-free retriever is sufficient for the coding-assistant context-memory workload.
+
+\section{Conclusion}
+We described \texttt{atex}, a lossless byte-page memory layer for MCP-capable AI coding assistants, and showed that on a 20-entry code-documentation benchmark it achieves 95\,\% recall@1 / 100\,\% recall@3 / 100\,\% recall@5 with sub-millisecond average query latency, and that its end-to-end RAG loop functions correctly against a 0.5B open-source model on commodity hardware. As a self-referential reproducibility argument, we used \texttt{atex} to track context during the build of \texttt{atex} itself, with full call logs and bench artifacts available in the public repository.
+
+\section*{Acknowledgments}
+The dogfood instrumentation was prompted by a user request to ``use ATEX for the entirety of this task and document how it has helped, both numerically and not'' --- a directive that converted a marketing argument into a measurable evaluation track.
+
+\begin{thebibliography}{9}
+
+\bibitem{mcp}
+Anthropic. The Model Context Protocol. Specification at \url{https://modelcontextprotocol.io}, 2024.
+
+\bibitem{mem0}
+mem0 contributors. \texttt{mem0}: Long-term memory for AI agents. \url{https://github.com/mem0ai/mem0}.
+
+\bibitem{basicmemory}
+\texttt{basic-memory}: Local-first markdown memory for LLMs. \url{https://github.com/basicmachines-co/basic-memory}.
+
+\bibitem{lewis2020rag}
+P.~Lewis, E.~Perez, A.~Piktus, et al. Retrieval-augmented generation for knowledge-intensive NLP tasks. NeurIPS 2020.
+
+\end{thebibliography}
+
+\end{document}

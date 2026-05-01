@@ -1,0 +1,65 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "amnitex"
+version = "0.1.0"
+description = "atex (amni-tex): a lossless byte-page memory layer for MCP-capable AI coding assistants. Local, no embeddings, no cloud."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+    { name = "Amni-Scient" },
+]
+keywords = ["mcp", "memory", "knowledge-base", "ai-assistant", "claude-code", "cursor", "cline", "continue", "zed", "context"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Text Processing :: Indexing",
+]
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-timeout>=2.1",
+    "ruff>=0.4",
+]
+
+[project.urls]
+Homepage = "https://github.com/Amnibro/atex"
+Repository = "https://github.com/Amnibro/atex"
+Issues = "https://github.com/Amnibro/atex/issues"
+
+[project.scripts]
+atex = "atex.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["atex*"]
+exclude = ["tests*", "bench*", "paper*"]
+
+[tool.setuptools.package-data]
+atex = ["seed/*.txt", "seed/*.md"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+timeout = 60
+
+[tool.ruff]
+line-length = 200
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = ["E501", "E701", "E702", "E731"]
