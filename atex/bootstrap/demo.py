@@ -58,12 +58,19 @@ def run_demo(argv=None)->int:
     ap.add_argument('--model',default=None,help='instead of wiring clients, run a local-model RAG validation loop using this ollama model name (e.g. qwen2.5:0.5b-instruct, llama3.2:1b)')
     ap.add_argument('--ollama-url',default='http://localhost:11434',help='ollama server URL (default: http://localhost:11434)')
     ap.add_argument('--walkthrough',action='store_true',help='paced + colored multi-step demo with explanations between each step')
-    ap.add_argument('--scenario',default=None,choices=['long-context'],help='run a built-in demonstration scenario (long-context: 5-turn conversation over a fake 15-file project)')
+    ap.add_argument('--scenario',default=None,choices=['long-context','long-session','corpus-scale'],help='run a built-in demonstration scenario (long-context: 5-turn fake-project demo; long-session: round-degradation test 2/5/50/500/2000; corpus-scale: KB-size test 2/500/50K/1M tokens)')
+    ap.add_argument('--out',default=None,help='write scenario results JSON to this path')
     ap.add_argument('--non-interactive',action='store_true',help='do not pause for keypresses between walkthrough/scenario steps (use a fixed sleep instead)')
     args=ap.parse_args(argv)
     if args.scenario=='long-context':
         from atex.clients.scenarios.long_context import run_long_context
         return run_long_context(Path(args.atex_dir).resolve(),model=args.model,interactive=not args.non_interactive,ollama_url=args.ollama_url)
+    if args.scenario=='long-session':
+        from atex.clients.scenarios.scale import run_long_session
+        return run_long_session(out_path=args.out)
+    if args.scenario=='corpus-scale':
+        from atex.clients.scenarios.scale import run_corpus_scale
+        return run_corpus_scale(out_path=args.out)
     if args.walkthrough:
         from atex.clients.walkthrough import run_walkthrough
         return run_walkthrough(Path(args.atex_dir).resolve(),model=args.model,interactive=not args.non_interactive,ollama_url=args.ollama_url)

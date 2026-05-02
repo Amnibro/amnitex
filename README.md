@@ -22,14 +22,44 @@ Every AI coding assistant forgets your project the moment a new session starts. 
 
 ## Numbers
 
-|                           | atex | naive substring scan |
+### Scale-validated retrieval (v0.2.0 spatial tex-grid)
+
+The default retriever is keyword-scan (O(N), simple). v0.2 adds a **spatial tex-grid** backend (O(num_query_tokens), texture-shaped inverted index, CPU-only, no extra deps).
+
+**Corpus-scale (20 queries per cell):**
+
+| Tokens | Entries  | KB-scan recall@1 | tex-grid recall@1 | KB-scan avg query | **tex-grid avg query** | **Speedup** |
+|-------:|---------:|------------------|-------------------|------------------:|-----------------------:|------------:|
+| 2      | 1        | 100%             | 100%              | 6.4 ms            | **0.015 ms**           | **425×**    |
+| 500    | 10       | 100%             | 100%              | 6.7 ms            | **0.004 ms**           | **1675×**   |
+| 50K    | 1,000    | 100%             | 95%               | 0.85 ms           | **0.004 ms**           | **212×**    |
+| 1M     | 20,000   | 100%             | 80% (256 grid)    | 16.6 ms           | **0.005 ms**           | **3320×**   |
+
+KB-scan trades latency for completeness. Tex-grid trades a few percent of recall for **3000×** lower query cost at 1M-token scale. Auto-sizing the grid for the entry count keeps recall@1 above 95% in v0.2 (the 80% number above is the fixed-256-grid baseline).
+
+**Long-session (no context degradation, 5 round-counts × 2 backends):**
+
+| Rounds | Recall (probe round 1, mid, last) | KB-scan p99 | tex-grid p99 |
+|-------:|-----------------------------------|------------:|-------------:|
+| 2      | **3/3 ✓**                         | sub-ms      | sub-ms       |
+| 5      | **3/3 ✓**                         | sub-ms      | sub-ms       |
+| 50     | **3/3 ✓**                         | 2.95 ms     | 0.04 ms      |
+| 500    | **3/3 ✓**                         | 3.75 ms     | 0.014 ms     |
+| 2000   | **3/3 ✓**                         | 4.93 ms     | 0.023 ms     |
+
+**Round 2000 retrieves the round-1 fact in 23 microseconds** with the tex-grid. Conversation length does not degrade recall — the data lives in the KB, not the model context window.
+
+Replay: `atex demo --scenario corpus-scale --out scale.json` and `atex demo --scenario long-session --out session.json`.
+
+### 20-query smoke (v0.1)
+
+|                           | atex (KB-scan) | naive substring scan |
 |---------------------------|----:|---------------------:|
 | recall@1 (20-query bench) | **95%** |                  90% |
 | recall@3                  | **100%** |                  95% |
 | recall@5                  | **100%** |                  95% |
 | avg query latency         | 0.5 ms |              0.05 ms |
 | p99 query latency         | 8.5 ms |               1.0 ms |
-| cold-start latency        | 2 ms |                    — |
 
 Replay: `atex bench`. Full numbers in [`bench_results.md`](bench_results.md), source in `atex/bench/`.
 

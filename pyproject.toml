@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "amnitex"
-version = "0.1.1"
+version = "0.2.0"
 description = "atex (amni-tex): a lossless byte-page memory layer for MCP-capable AI coding assistants. Local, no embeddings, no cloud."
 readme = "README.md"
 requires-python = ">=3.10"

@@ -1,0 +1,322 @@
+[
+  {
+    "backend": "kb",
+    "rounds": 2,
+    "kb_entries": 2,
+    "kb_used_kb": 0.390625,
+    "write_total_ms": 9.25,
+    "write_avg_ms_per_round": 4.627,
+    "recalls": [
+      {
+        "probed_round": 1,
+        "expected_key": "turn::round_000001",
+        "top_key": "turn::round_000001",
+        "hit": true,
+        "recall_ms": 2.905
+      },
+      {
+        "probed_round": 1,
+        "expected_key": "turn::round_000001",
+        "top_key": "turn::round_000001",
+        "hit": true,
+        "recall_ms": 0.01
+      },
+      {
+        "probed_round": 2,
+        "expected_key": "turn::round_000002",
+        "top_key": "turn::round_000002",
+        "hit": true,
+        "recall_ms": 0.004
+      }
+    ],
+    "recall_hit_rate": "3/3"
+  },
+  {
+    "backend": "tex",
+    "rounds": 2,
+    "kb_entries": 2,
+    "kb_used_kb": 0.390625,
+    "write_total_ms": 64.18,
+    "write_avg_ms_per_round": 32.091,
+    "recalls": [
+      {
+        "probed_round": 1,
+        "expected_key": "turn::round_000001",
+        "top_key": "turn::round_000001",
+        "hit": true,
+        "recall_ms": 0.012
+      },
+      {
+        "probed_round": 1,
+        "expected_key": "turn::round_000001",
+        "top_key": "turn::round_000001",
+        "hit": true,
+        "recall_ms": 0.006
+      },
+      {
+        "probed_round": 2,
+        "expected_key": "turn::round_000002",
+        "top_key": "turn::round_000002",
+        "hit": true,
+        "recall_ms": 0.004
+      }
+    ],
+    "recall_hit_rate": "3/3"
+  },
+  {
+    "backend": "kb",
+    "rounds": 5,
+    "kb_entries": 5,
+    "kb_used_kb": 0.9765625,
+    "write_total_ms": 17.97,
+    "write_avg_ms_per_round": 3.594,
+    "recalls": [
+      {
+        "probed_round": 1,
+        "expected_key": "turn::round_000001",
+        "top_key": "turn::round_000001",
+        "hit": true,
+        "recall_ms": 2.909
+      },
+      {
+        "probed_round": 2,
+        "expected_key": "turn::round_000002",
+        "top_key": "turn::round_000002",
+        "hit": true,
+        "recall_ms": 0.01
+      },
+      {
+        "probed_round": 5,
+        "expected_key": "turn::round_000005",
+        "top_key": "turn::round_000005",
+        "hit": true,
+        "recall_ms": 0.006
+      }
+    ],
+    "recall_hit_rate": "3/3"
+  },
+  {
+    "backend": "tex",
+    "rounds": 5,
+    "kb_entries": 5,
+    "kb_used_kb": 0.9765625,
+    "write_total_ms": 21.0,
+    "write_avg_ms_per_round": 4.201,
+    "recalls": [
+      {
+        "probed_round": 1,
+        "expected_key": "turn::round_000001",
+        "top_key": "turn::round_000001",
+        "hit": true,
+        "recall_ms": 0.019
+      },
+      {
+        "probed_round": 2,
+        "expected_key": "turn::round_000002",
+        "top_key": "turn::round_000002",
+        "hit": true,
+        "recall_ms": 0.008
+      },
+      {
+        "probed_round": 5,
+        "expected_key": "turn::round_000005",
+        "top_key": "turn::round_000005",
+        "hit": true,
+        "recall_ms": 0.007
+      }
+    ],
+    "recall_hit_rate": "3/3"
+  },
+  {
+    "backend": "kb",
+    "rounds": 50,
+    "kb_entries": 50,
+    "kb_used_kb": 9.765625,
+    "write_total_ms": 155.94,
+    "write_avg_ms_per_round": 3.119,
+    "recalls": [
+      {
+        "probed_round": 1,
+        "expected_key": "turn::round_000001",
+        "top_key": "turn::round_000001",
+        "hit": true,
+        "recall_ms": 2.953
+      },
+      {
+        "probed_round": 25,
+        "expected_key": "turn::round_000025",
+        "top_key": "turn::round_000025",
+        "hit": true,
+        "recall_ms": 0.04
+      },
+      {
+        "probed_round": 50,
+        "expected_key": "turn::round_000050",
+        "top_key": "turn::round_000050",
+        "hit": true,
+        "recall_ms": 0.035
+      }
+    ],
+    "recall_hit_rate": "3/3"
+  },
+  {
+    "backend": "tex",
+    "rounds": 50,
+    "kb_entries": 50,
+    "kb_used_kb": 9.765625,
+    "write_total_ms": 248.98,
+    "write_avg_ms_per_round": 4.98,
+    "recalls": [
+      {
+        "probed_round": 1,
+        "expected_key": "turn::round_000001",
+        "top_key": "turn::round_000001",
+        "hit": true,
+        "recall_ms": 0.013
+      },
+      {
+        "probed_round": 25,
+        "expected_key": "turn::round_000025",
+        "top_key": "turn::round_000025",
+        "hit": true,
+        "recall_ms": 0.004
+      },
+      {
+        "probed_round": 50,
+        "expected_key": "turn::round_000050",
+        "top_key": "turn::round_000050",
+        "hit": true,
+        "recall_ms": 0.003
+      }
+    ],
+    "recall_hit_rate": "3/3"
+  },
+  {
+    "backend": "kb",
+    "rounds": 500,
+    "kb_entries": 500,
+    "kb_used_kb": 97.65625,
+    "write_total_ms": 1601.63,
+    "write_avg_ms_per_round": 3.203,
+    "recalls": [
+      {
+        "probed_round": 1,
+        "expected_key": "turn::round_000001",
+        "top_key": "turn::round_000001",
+        "hit": true,
+        "recall_ms": 3.751
+      },
+      {
+        "probed_round": 250,
+        "expected_key": "turn::round_000250",
+        "top_key": "turn::round_000250",
+        "hit": true,
+        "recall_ms": 0.489
+      },
+      {
+        "probed_round": 500,
+        "expected_key": "turn::round_000500",
+        "top_key": "turn::round_000500",
+        "hit": true,
+        "recall_ms": 0.318
+      }
+    ],
+    "recall_hit_rate": "3/3"
+  },
+  {
+    "backend": "tex",
+    "rounds": 500,
+    "kb_entries": 500,
+    "kb_used_kb": 97.65625,
+    "write_total_ms": 1689.44,
+    "write_avg_ms_per_round": 3.379,
+    "recalls": [
+      {
+        "probed_round": 1,
+        "expected_key": "turn::round_000001",
+        "top_key": "turn::round_000001",
+        "hit": true,
+        "recall_ms": 0.014
+      },
+      {
+        "probed_round": 250,
+        "expected_key": "turn::round_000250",
+        "top_key": "turn::round_000250",
+        "hit": true,
+        "recall_ms": 0.004
+      },
+      {
+        "probed_round": 500,
+        "expected_key": "turn::round_000500",
+        "top_key": "turn::round_000500",
+        "hit": true,
+        "recall_ms": 0.004
+      }
+    ],
+    "recall_hit_rate": "3/3"
+  },
+  {
+    "backend": "kb",
+    "rounds": 2000,
+    "kb_entries": 2000,
+    "kb_used_kb": 390.625,
+    "write_total_ms": 6633.41,
+    "write_avg_ms_per_round": 3.317,
+    "recalls": [
+      {
+        "probed_round": 1,
+        "expected_key": "turn::round_000001",
+        "top_key": "turn::round_000001",
+        "hit": true,
+        "recall_ms": 4.933
+      },
+      {
+        "probed_round": 1000,
+        "expected_key": "turn::round_001000",
+        "top_key": "turn::round_001000",
+        "hit": true,
+        "recall_ms": 1.282
+      },
+      {
+        "probed_round": 2000,
+        "expected_key": "turn::round_002000",
+        "top_key": "turn::round_002000",
+        "hit": true,
+        "recall_ms": 1.35
+      }
+    ],
+    "recall_hit_rate": "3/3"
+  },
+  {
+    "backend": "tex",
+    "rounds": 2000,
+    "kb_entries": 2000,
+    "kb_used_kb": 390.625,
+    "write_total_ms": 6903.33,
+    "write_avg_ms_per_round": 3.452,
+    "recalls": [
+      {
+        "probed_round": 1,
+        "expected_key": "turn::round_000001",
+        "top_key": "turn::round_000001",
+        "hit": true,
+        "recall_ms": 0.023
+      },
+      {
+        "probed_round": 1000,
+        "expected_key": "turn::round_001000",
+        "top_key": "turn::round_001000",
+        "hit": true,
+        "recall_ms": 0.008
+      },
+      {
+        "probed_round": 2000,
+        "expected_key": "turn::round_002000",
+        "top_key": "turn::round_002000",
+        "hit": true,
+        "recall_ms": 0.004
+      }
+    ],
+    "recall_hit_rate": "3/3"
+  }
+]
