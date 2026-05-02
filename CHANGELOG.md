@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.2.1] — 2026-05-01
+
+- Docs correction: README and `corpus_scale_results.json` now reflect the auto-sized tex-grid measurements. The 1M-token recall@1 is **100%** (was reported as 80% from the pre-auto-sizing baseline); speedup vs keyword-scan at 1M is **6075×** (was 3320×). No code changes — `auto_grid_dim()` was already in 0.2.0.
+
 ## [0.2.0] — 2026-05-01
 
 ### Added — texture-map retrieval backend
