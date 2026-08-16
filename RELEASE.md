@@ -5,9 +5,9 @@ Run-through for the launch. Each step is independent; you can pause at any point
 ## Pre-flight (already done — verify only)
 
 ```powershell
-cd C:\Users\antho\Documents\ai\atex
-C:\Users\antho\Documents\ai\Amni-Ai\.venv\Scripts\python.exe -m unittest discover -s tests   # expect: 31 tests OK
-C:\Users\antho\Documents\ai\Amni-Ai\.venv\Scripts\python.exe -m atex.cli bench               # expect: recall@1=95%
+cd <your atex checkout>
+python -m unittest discover -s tests   # expect: 31 tests OK
+python -m atex.cli bench               # expect: recall@1=95%
 ```
 
 If any of those fail, stop and investigate.
@@ -33,7 +33,7 @@ If you'd rather skip the GIF for v0.1.0 and add it in v0.1.1 — totally fine. T
 ## Step 2 — push to GitHub (~3 min)
 
 ```powershell
-cd C:\Users\antho\Documents\ai\atex
+cd <your atex checkout>
 git init
 git add -A
 git status   # sanity check — should NOT include .atex/ or .atex_metrics.jsonl (gitignored)
@@ -50,12 +50,12 @@ If anything red: don't pull-down the repo, just push a fix commit. CI red on a b
 You'll need `twine` and a PyPI account.
 
 ```powershell
-C:\Users\antho\Documents\ai\Amni-Ai\.venv\Scripts\python.exe -m pip install --upgrade build twine
-cd C:\Users\antho\Documents\ai\atex
+python -m pip install --upgrade build twine
+cd <your atex checkout>
 Remove-Item -Recurse -Force dist -ErrorAction SilentlyContinue
-C:\Users\antho\Documents\ai\Amni-Ai\.venv\Scripts\python.exe -m build
+python -m build
 # creates dist/amnitex-0.1.0-py3-none-any.whl and dist/amnitex-0.1.0.tar.gz
-C:\Users\antho\Documents\ai\Amni-Ai\.venv\Scripts\python.exe -m twine upload dist/amnitex-0.1.0*
+python -m twine upload dist/amnitex-0.1.0*
 # enter your PyPI API token when prompted
 ```
 
@@ -68,7 +68,7 @@ Verify: `pip install amnitex` from a fresh shell should pull v0.1.0; the `atex` 
 Build the PDF:
 
 ```powershell
-cd C:\Users\antho\Documents\ai\atex\paper
+cd paper
 # install MiKTeX or use any LaTeX environment, then:
 pdflatex atex.tex
 pdflatex atex.tex   # second pass for refs

@@ -6,8 +6,8 @@ This document is the running case study of using `atex` to track the build of `a
 
 ## Setup
 
-- **Dogfood KB location:** `C:/Users/antho/Documents/ai/atex/.atex/`
-- **Driver:** `C:/Users/antho/Documents/ai/Amni-Ai/scripts/atex_dogfood.py` (instrumented wrapper around the same `KnowledgeBase` + `KBRetriever` code that ships in the public package)
+- **Dogfood KB location:** `<repo>/.atex/`
+- **Driver:** `scripts/atex_dogfood.py` in the Amni-Ai repo (instrumented wrapper around the same `KnowledgeBase` + `KBRetriever` code that ships in the public package)
 - **Metrics log:** `.atex_metrics.jsonl` — one JSONL event per call (op, key/query, hit, wall_ms, iteration, note)
 - **Seed corpus** (ingested at iteration 2 start):
   1. `council` — Guardian Council for the public release
