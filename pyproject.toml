@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [
-    { name = "Amni-Scient" },
+    { name = "Amniscient, LLC", email = "amnibro7@gmail.com" },
 ]
 keywords = ["mcp", "memory", "knowledge-base", "ai-assistant", "claude-code", "cursor", "cline", "continue", "zed", "context"]
 classifiers = [
