@@ -1,0 +1,193 @@
+{
+  "version": 1,
+  "entries": {
+    "9a3f3ca1bcf9aca7b1cd9bcd": {
+      "q": "which gpu for compute",
+      "a": "RX 9060 XT (RDNA4, gfx1200). Pin via AMNI_GPU_ARCH=gfx1200 / _shared/amni_gpu_env.py. Never use 7800 XT for Adam/Amni-Gen/miner compute.",
+      "norm": "which gpu for compute",
+      "tags": [
+        "gpu",
+        "session"
+      ],
+      "source": "seed",
+      "ts": 1783816967.6542215,
+      "hit_count": 0
+    },
+    "9fef483d0711153f95f37211": {
+      "q": "which gpu for gaming display visual",
+      "a": "RX 7800 XT (RDNA3, gfx1101). Reserved for gaming and visual/UI. AMNI_RESERVE_DISPLAY_GPU=1 keeps compute off it when 9060 present.",
+      "norm": "which gpu for gaming display visual",
+      "tags": [
+        "gpu",
+        "session"
+      ],
+      "source": "seed",
+      "ts": 1783816967.6552212,
+      "hit_count": 0
+    },
+    "8bd151c968dc522f0f95a88d": {
+      "q": "dual gpu policy 9060 7800",
+      "a": "Compute apps: Amni-Ai, Amni-Gen, Amni-miner, special-equations → 9060 XT gfx1200. Display/gaming → 7800 XT gfx1101. iGPU gfx1036 never for weights.",
+      "norm": "dual gpu policy 9060 7800",
+      "tags": [
+        "gpu",
+        "session"
+      ],
+      "source": "seed",
+      "ts": 1783816967.656221,
+      "hit_count": 0
+    },
+    "b40ccfdb78d5dbe40eef6dbd": {
+      "q": "how to pin 9060 xt",
+      "a": "Import/_shared amni_gpu_env.apply_compute_env or rocm_init. Env: AMNI_GPU_ARCH=gfx1200 AMNI_RESERVE_DISPLAY_GPU=1. Override index: AMNI_GPU_INDEX. Disable: AMNI_NO_GPU_PIN=1.",
+      "norm": "how to pin 9060 xt",
+      "tags": [
+        "gpu",
+        "session"
+      ],
+      "source": "seed",
+      "ts": 1783816967.6572218,
+      "hit_count": 0
+    },
+    "d76adc511179b58cb1ace645": {
+      "q": "ram oom safeguard",
+      "a": "Host RAM guard in amni_gpu_env.ram_guard: AMNI_RAM_RESERVE_GB=6 AMNI_RAM_MAX_FRACTION=0.70 AMNI_RAM_HARD=1. Sets AMNI_HOST_RAM_BUDGET_MB. Use expandable_segments HIP alloc. Do not memmap entire bakes into page cache when model fits VRAM.",
+      "norm": "ram oom safeguard",
+      "tags": [
+        "gpu",
+        "session"
+      ],
+      "source": "seed",
+      "ts": 1783816967.6572218,
+      "hit_count": 0
+    },
+    "1f50f8ad953d8a71d7adc3d1": {
+      "q": "session atex lookup",
+      "a": "Multi-session facts live in atex/session/catalog.json. Agents: python scripts/atex_session.py query \"<topic>\" before wide repo search. Pack: python scripts/atex_session.py seed. Handoff: docs/SESSION_HANDOFF.md.",
+      "norm": "session atex lookup",
+      "tags": [
+        "gpu",
+        "session"
+      ],
+      "source": "seed",
+      "ts": 1783816967.6587236,
+      "hit_count": 0
+    },
+    "159d6730e9e06c6709d74280": {
+      "q": "where is shared gpu env",
+      "a": "_shared/amni_gpu_env.py — source of truth for probe, prefer gfx1200, reserve display archs, RAM budget.",
+      "norm": "where is shared gpu env",
+      "tags": [
+        "gpu",
+        "session"
+      ],
+      "source": "seed",
+      "ts": 1783816967.6597269,
+      "hit_count": 0
+    },
+    "3cbcd380636fb7822705f1be": {
+      "q": "open loop dual gpu 2026-07-11",
+      "a": "7800 XT reinstalled alongside 9060 XT. Compute pin + RAM guards + session ATEX shipped. User still must confirm live matmul on 9060 under dual-GPU enumeration and no host OOM under Adam+gen.",
+      "norm": "open loop dual gpu 2026-07-11",
+      "tags": [
+        "gpu",
+        "session"
+      ],
+      "source": "seed",
+      "ts": 1783816967.6597269,
+      "hit_count": 0
+    },
+    "ed79f57823664bee4468798b": {
+      "q": "session handoff summary",
+      "a": "# Session handoff (read first)\n\n**Agents:** before wide repo search, run:\n\n```bat\npython scripts/atex_session.py query \"your topic\"\n```\n\nExact/fuzzy hits return short facts (token-cheap). On miss, then grep/read files.\n\n## Dual-GPU policy (2026-07-11)\n\n| Role | Card | Arch | Notes |\n|------|------|------|--------|\n| **Compute** | RX 9060 XT | gfx1200 | Adam, Amni-Gen, miner, special-equations |\n| **Display / gaming** | RX 7800 XT | gfx1101 | Games, UI; reserved when 9060 present |\n| **Avoid** | iGPU | gfx1036 | Never load model weights here |\n\n**Source of truth:** `_shared/amni_gpu_env.py`  \n**Env:** `AMNI_GPU_ARCH=gfx1200` · `AMNI_RESERVE_DISPLAY_GPU=1` · `AMNI_RAM_RESERVE_GB=6` · `AMNI_RAM_MAX_FRACTION=0.70`\n\n## Session ATEX\n\n- Catalog: `atex/session/catalog.json`\n- Seed/update: `python scripts/atex_session.py seed`\n- Store fact: `python scripts/atex_session.py store \"q\" \"a\"`\n- This is a **sparse LUT**, not a full monorepo dump.\n\n## Open loops\n\n1. **BLOCKER (2026-07-11 probe):** Windows + HIP only see **iGPU gfx1036 + RX 7800 XT gfx1101**. **RX 9060 XT is NOT in Device Manager / `torch.cuda` list.** Reseat power (2×8pin), PCIe, Adrenalin, or enable second dGPU before compute pin can land on gfx1200.\n2. Amni-Gen `venv_rocm` is **gfx1200-only** torch — matmul on 7800 fails `invalid kernel image`. Until 9060 returns, either fix hardware visibility or install multi-arch `torch[device-gfx1200,device-gfx1101]`.\n3. Confirm no host RAM OOM under Adam + gen while gaming on 7800 (once dual dGPU works).\n4. Optional: `AMNI_REQUIRE_COMPUTE_ARCH=1` to hard-fail serve if 9060 missing.\n\n## Checklist\n\n`docs/checklists/checklist_dual_gpu_ram_atex_v1.md`\n",
+      "norm": "session handoff summary",
+      "tags": [
+        "handoff"
+      ],
+      "source": "handoff",
+      "ts": 1783816967.6612298,
+      "hit_count": 0
+    },
+    "18613affd383c493210b8b93": {
+      "q": "is 9060 xt visible",
+      "a": "As of 2026-07-11 HIP/Windows probe: NO. Only iGPU gfx1036 + RX 7800 XT gfx1101. Fix PCIe/power/driver until gfx1200 appears, then AMNI_GPU_ARCH=gfx1200 pin works.",
+      "norm": "is 9060 xt visible",
+      "tags": [],
+      "source": "manual",
+      "ts": 1783816961.0771885,
+      "hit_count": 0
+    },
+    "980d66b10c98a4c2a5de6d96": {
+      "q": "why compute on 7800 invalid kernel",
+      "a": "Amni-Gen venv_rocm is TheRock torch device-gfx1200 only. Kernels do not run on gfx1101 (7800). Need 9060 visible or multi-arch torch with device-gfx1101.",
+      "norm": "why compute on 7800 invalid kernel",
+      "tags": [],
+      "source": "manual",
+      "ts": 1783816961.120769,
+      "hit_count": 0
+    },
+    "e3c5bf65d487ab1f4a644843": {
+      "q": "Adam self evolve bank mount serve",
+      "a": "v6.20.17 mount_self_evolve_banks merges eval_reports/self_evolve_bank_*/lessons into sem_lut at amni_serve boot; AMNI_NO_SELF_EVOLVE_BANK=1 skips",
+      "norm": "adam self evolve bank mount serve",
+      "tags": [],
+      "source": "manual",
+      "ts": 1784215151.9932652,
+      "hit_count": 0
+    },
+    "1faf6e390bc06396aef247a3": {
+      "q": "Adam verify loop auto",
+      "a": "v6.20.19 AMNI_VERIFY_LOOP=auto default at serve/keepalive; AdamLoop._verify_gate computational subjects only; healthz exposes flags",
+      "norm": "adam verify loop auto",
+      "tags": [],
+      "source": "manual",
+      "ts": 1784216017.435012,
+      "hit_count": 0
+    },
+    "a56bd513757da904f2b9a2c4": {
+      "q": "Adam MCQ bank re-eval",
+      "a": "v6.20.20-21 MCQ soft semantic off by default; after bank exact LUT only; phys+math n=8 pipe 50 to 100pp; sinter pack n_lessons matches unique",
+      "norm": "adam mcq bank re-eval",
+      "tags": [],
+      "source": "manual",
+      "ts": 1784218001.3397477,
+      "hit_count": 0
+    },
+    "6f9ad6dba605dcce0cd550cf": {
+      "q": "azno-v2 late entry exit bullish fees",
+      "a": "v3.89.0: root cause = marker i-1 lookahead vs kernel confirm-i (+1.75% fantasy); bull WR~70%; crypto 15m OOS~57% under fees. Fixes: confirm-bar fills Py+Rust, PEXT 11.6M GPU grid ~100M/s, second-trough buy gate (AZNO_SECOND_TROUGH), elite OOS portfolio. Confirmed stock1h elite: 91% WR +26% equity soft stepwise. Scripts: azno-v2/scripts/profitability_loop.py confirm_80wr_growth.py",
+      "norm": "azno-v2 late entry exit bullish fees",
+      "tags": [],
+      "source": "manual",
+      "ts": 1784509876.8610554,
+      "hit_count": 0
+    },
+    "900e8e2f0ad10e38b634800f": {
+      "q": "azno-v2 bear monte carlo",
+      "a": "v3.89.1: hist P-bear WR~75% (not bleed); price FLAT ~69% is weak. skip_bear rejects (kills dips). MC full-path downturn medWR~37% medRet-2% p5-46% — overfit to hist. Future+250 sparse but p5 neg. core/monte_carlo.py causal; AZNO_MC_GATE default off; AZNO_PRICE_TREND_MIN flat skip. only_trend elite OOS WR 96.6% n=29.",
+      "norm": "azno-v2 bear monte carlo",
+      "tags": [],
+      "source": "manual",
+      "ts": 1784510995.1831937,
+      "hit_count": 0
+    },
+    "cc8ea77d9002ea3b19bd3055": {
+      "q": "Adam dual-address self-evolve latest",
+      "a": "v6.20.210 domain-qual def-head ACID in databases + oauth2/idempotency synonyms + CAP/bloom/Raft/RBT/vector-db/microkernel cores cover13; live was 6.20.208 package 210",
+      "norm": "adam dual-address self-evolve latest",
+      "tags": [],
+      "source": "manual",
+      "ts": 1784623997.6476889,
+      "hit_count": 0
+    },
+    "f3669caa617ea15bb65d330b": {
+      "q": "Adam dual chat inject",
+      "a": "v6.20.194: meta dark_guide vanity prune + chat_facts core/weak/densify allow-gate; hit-route w=0.05 in 193; APP_VERSION 6.20.194 serve may lag keepalive",
+      "norm": "adam dual chat inject",
+      "tags": [],
+      "source": "manual",
+      "ts": 1784613278.2684155,
+      "hit_count": 0
+    }
+  }
+}
