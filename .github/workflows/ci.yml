@@ -1,10 +1,8 @@
+# Disabled 2026-10-30: builds run locally on Anthony's PC/Mac
 name: CI
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+  workflow_dispatch:
 
 jobs:
   test:
