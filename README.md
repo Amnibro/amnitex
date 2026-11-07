@@ -38,6 +38,8 @@ curl -fsSL https://github.com/Amnibro/amnitex/releases/latest/download/install.s
 - **OpenAI Codex / Cursor / Windsurf:**
   Automatically wired by `atex install` (or load `.codex-plugin/plugin.json` / `.cursor-plugin/plugin.json`).
 
+> Marketplace plugin installs register the MCP server as `atex serve`, so the `atex` binary must be on `PATH`. Run the one-line installer first.
+
 ---
 
 ## What it does
@@ -52,20 +54,20 @@ Every AI coding assistant either forgets your project at session boundaries or r
 
 ### Fresh-Turn Conversation LUT vs. Standard History & Lossy Compaction (v0.3.0 Native Helium)
 
-Reproducible via `./bench_conv_lut_bin` (`bench_conv_lut.gold`, 200 turns, 20 planted ground-truth engineering facts):
+Reproducible via `./bench_conv_lut_bin` (`bench_conv_lut.gold`, 200 simulated turns, 20 planted ground-truth facts). Every number below is copied from [`conv_lut_bench_results.json`](conv_lut_bench_results.json). Token counts are from a deterministic simulation, not a live model.
 
-| Horizon | Standard History ($O(N^2)$) | Summary Compaction ($5\times$ every 25 turns) | **AmniTex Fresh-Turn LUT ($O(1)$)** | **Cumulative Saved vs. Full** | **Exact Fact Recall** |
-|--------:|----------------------------:|----------------------------------------------:|------------------------------------:|------------------------------:|----------------------:|
-| Turn 10 | 74,720 tok | 74,720 tok | **18,500 tok** | **75.24%** | **20/20 (100.0%)** |
-| Turn 20 | 262,440 tok | 262,440 tok | **37,000 tok** | **85.90%** | **20/20 (100.0%)** |
-| Turn 50 | 1,546,600 tok | 834,600 tok | **92,500 tok** | **94.02%** | **20/20 (100.0%)** |
-| Turn 100 | 6,110,200 tok | 1,867,200 tok | **185,000 tok** | **96.97%** | **20/20 (100.0%)** |
-| Turn 200 | 24,289,400 tok | 4,678,400 tok | **370,000 tok** | **98.48%** | **20/20 (100.0%)** |
-| Turn 1000 | 522,092,500 tok | 74,820,000 tok | **1,850,000 tok** | **99.65%** | **20/20 (100.0%)** |
+| Turn | Full history (cumulative input) | Rolling window + lossy summary every 7 turns | **AmniTex Fresh-Turn LUT** | **Saved vs. full history** |
+|-----:|--------------------------------:|---------------------------------------------:|---------------------------:|---------------------------:|
+| 5 | 170,970 tok | 29,110 tok | **8,760 tok** | **94.88%** |
+| 10 | 463,190 tok | 79,860 tok | **17,520 tok** | **96.22%** |
+| 20 | 1,411,380 tok | 211,910 tok | **35,040 tok** | **97.52%** |
+| 50 | 7,165,950 tok | 625,370 tok | **87,600 tok** | **98.78%** |
+| 100 | 26,456,900 tok | 1,419,650 tok | **175,200 tok** | **99.34%** |
+| 200 | 101,413,800 tok | 3,420,440 tok | **350,400 tok** | **99.65%** |
 
-- **200-turn ingest time:** `2.28 ms` total (`11.4 µs/turn`)
-- **Single-query `TexGrid` lookup:** `1.66 µs` (`17.5×` faster than Python `serve.py`)
-- **Exact fact recall:** `20/20 (100.0%)` vs. `4/20 (20.0%)` after lossy summary compaction
+- **200-turn ingest time:** `2.28 ms` total
+- **Single-query `TexGrid` lookup:** `1.66 µs`
+- **Exact fact recall at turn 200:** `20/20` with the LUT vs. `2/20` after lossy summary compaction
 - Interactive charts & full writeup: **[amni-scient.com/amnitex-lut.html](https://amni-scient.com/amnitex-lut.html)**
 
 ### Scale-validated retrieval (v0.2.0 spatial tex-grid)

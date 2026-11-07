@@ -477,10 +477,36 @@ fn run_init(proj_dir const byte[:], kb_dir const byte[:]) {
 	write_stdout(str("[atex init] indexed ", count, " entries (", ENTRIES.len, " total) into ", ADIR, " (gold/helium-native)\n")[..]);
 	flush_stdout();
 }
+fn json_scan(raw const byte[:], start int, key const byte[:]) int {
+	var depth = 0;
+	var in_s = false;
+	var i = start;
+	while i < raw.len {
+		let c = raw[i];
+		if in_s {
+			if c == '\\' { i += 2; continue; }
+			if c == '"' { in_s = false; }
+		} else if c == '"' {
+			if key.len > 0 && depth == 1 && i + key.len <= raw.len && raw[i..i + key.len] == key { return i; }
+			in_s = true;
+		} else if c == '{' || c == '[' { depth += 1; }
+		else if c == '}' || c == ']' {
+			depth -= 1;
+			if key.len == 0 && depth == 0 { return i; }
+		}
+		i += 1;
+	}
+	-1
+}
 fn wire_json_mcp(cfg_path const byte[:], bin_path const byte[:], kb_dir const byte[:]) bool {
 	var raw byte[>..] = [];
 	let exists = read_file(cfg_path, raw);
-	if exists && find(raw[..], "\"amnitex\"") >= 0 { return true; }
+	let tpos = if exists { json_scan(raw[..], 0, "\"mcpServers\"") } else { -1 };
+	if tpos >= 0 {
+		let ob = find(raw[tpos..], "{");
+		let oe = if ob >= 0 { json_scan(raw[..], tpos + ob, "") } else { -1 };
+		if oe > 0 && json_scan(raw[tpos + ob..oe + 1], 0, "\"amnitex\"") >= 0 { return true; }
+	}
 	let entry = str("\"amnitex\":{\"command\":", json_str(bin_path), ",\"args\":[\"serve\",\"--atex-dir\",", json_str(kb_dir), "]}");
 	var out byte[>..] = [];
 	if !exists || trim(raw[..]).len == 0 {
@@ -489,7 +515,7 @@ fn wire_json_mcp(cfg_path const byte[:], bin_path const byte[:], kb_dir const by
 		out.append("\n  }\n}\n");
 	} else {
 		write_file(str(cfg_path, ".atex-backup"), raw[..]);
-		let pos = find(raw[..], "\"mcpServers\"");
+		let pos = tpos;
 		if pos >= 0 {
 			let br = find(raw[pos..], "{");
 			if br >= 0 {
@@ -534,8 +560,7 @@ fn run_install(bin_arg const byte[:], kb_dir const byte[:]) {
 			write_stdout("  + wired Claude Code (~/.claude.json)\n");
 			wired += 1;
 		}
-		make_dir(str(hm, "/.cursor"));
-		if wire_json_mcp(str(hm, "/.cursor/mcp.json")[..], bin_path[..], kb_dir) {
+		if is_dir(str(hm, "/.cursor")) && wire_json_mcp(str(hm, "/.cursor/mcp.json")[..], bin_path[..], kb_dir) {
 			write_stdout("  + wired Cursor (~/.cursor/mcp.json)\n");
 			wired += 1;
 		}
@@ -658,11 +683,11 @@ fn main() {
 	while i < av.len {
 		let a = av[i];
 		if a == "--version" || a == "-v" {
-			write_stdout("atex 0.3.0 (gold/helium-native)\n");
+			write_stdout("atex 0.3.1 (gold/helium-native)\n");
 			flush_stdout();
 			return;
 		} else if a == "--help" || a == "-h" || a == "help" {
-			write_stdout("atex 0.3.0 (gold/helium-native)\nUsage:\n  atex [serve] [--atex-dir <dir>]     Run MCP stdio server\n  atex init [project_dir] [--atex-dir <dir>]  Index project docs & code into KB\n  atex install [--atex-dir <dir>]     Auto-wire Claude, Cursor, Windsurf, Gemini, Codex\n  atex stats [--atex-dir <dir>]       Print knowledge base statistics\n  atex --selftest                     Run end-to-end TexGrid & byte-page self-test\n");
+			write_stdout("atex 0.3.1 (gold/helium-native)\nUsage:\n  atex [serve] [--atex-dir <dir>]     Run MCP stdio server\n  atex init [project_dir] [--atex-dir <dir>]  Index project docs & code into KB\n  atex install [--atex-dir <dir>]     Auto-wire Claude, Cursor, Windsurf, Gemini, Codex\n  atex stats [--atex-dir <dir>]       Print knowledge base statistics\n  atex --selftest                     Run end-to-end TexGrid & byte-page self-test\n");
 			flush_stdout();
 			return;
 		} else if a == "--selftest" || a == "selftest" {
@@ -719,7 +744,7 @@ fn main() {
 			var out byte[>..] = [];
 			out.append("{\"jsonrpc\":\"2.0\",");
 			write_id(out, d, id_node);
-			out.append(",\"result\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"atex-gold\",\"version\":\"0.3.0\"}}}\n");
+			out.append(",\"result\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"atex-gold\",\"version\":\"0.3.1\"}}}\n");
 			write_stdout(out[..]);
 			flush_stdout();
 		} else if m == "tools/list" {

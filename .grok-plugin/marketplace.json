@@ -7,7 +7,7 @@
   "plugins": [
     {
       "name": "amnitex",
-      "version": "0.3.0",
+      "version": "0.3.1",
       "description": "Lossless byte-page memory layer and Fresh-Turn Conversation LUT in native Gold/Helium. 1.66 µs spatial TexGrid retrieval, 100% exact recall, and 95%–99.65% cumulative context savings.",
       "author": {
         "name": "Amniscient, LLC"

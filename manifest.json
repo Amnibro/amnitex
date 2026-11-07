@@ -2,7 +2,7 @@
   "manifest_version": "0.2",
   "name": "amnitex",
   "display_name": "AmniTex (Native Helium LUT)",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Lossless byte-page memory layer and Fresh-Turn Conversation LUT in native Gold/Helium.",
   "long_description": "AmniTex persists project knowledge and conversation turns into a local, lossless byte-page key-value store (.atex) indexed by a 2D spatial TexGrid in native Gold/Helium. Retrieves exact code, rules, and prior turn facts in 1.66 microseconds with 100% lossless recall and 95%–99.65% cumulative token reduction.",
   "author": {"name": "Amniscient, LLC", "url": "https://amni-scient.com"},
