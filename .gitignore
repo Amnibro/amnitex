@@ -32,3 +32,5 @@ paper/*.out
 paper/*.bbl
 paper/*.blg
 paper/*.synctex.gz
+*_bin
+*.gold.lock

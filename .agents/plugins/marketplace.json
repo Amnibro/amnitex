@@ -1,0 +1,20 @@
+{
+  "name": "amnitex-marketplace",
+  "interface": {
+    "displayName": "AmniTex Official"
+  },
+  "plugins": [
+    {
+      "name": "amnitex",
+      "source": {
+        "source": "local",
+        "path": "."
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

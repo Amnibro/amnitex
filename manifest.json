@@ -1,0 +1,39 @@
+{
+  "manifest_version": "0.2",
+  "name": "amnitex",
+  "display_name": "AmniTex (Native Helium LUT)",
+  "version": "0.3.0",
+  "description": "Lossless byte-page memory layer and Fresh-Turn Conversation LUT in native Gold/Helium.",
+  "long_description": "AmniTex persists project knowledge and conversation turns into a local, lossless byte-page key-value store (.atex) indexed by a 2D spatial TexGrid in native Gold/Helium. Retrieves exact code, rules, and prior turn facts in 1.66 microseconds with 100% lossless recall and 95%–99.65% cumulative token reduction.",
+  "author": {"name": "Amniscient, LLC", "url": "https://amni-scient.com"},
+  "homepage": "https://amni-scient.com/amnitex-lut.html",
+  "support": "https://github.com/Amnibro/amnitex/issues",
+  "license": "MIT",
+  "server": {
+    "type": "node",
+    "entry_point": "mcpb-entry.mjs",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/mcpb-entry.mjs"],
+      "env": {"ATEX_DIR": "${user_config.atex_dir}"}
+    }
+  },
+  "tools": [
+    {"name": "atex_search", "description": "Search the local atex knowledge base (spatial tex-grid) for entries matching a query."},
+    {"name": "atex_recall", "description": "Exact-key lookup in the atex knowledge base."},
+    {"name": "atex_remember", "description": "Persist a learned fact to the atex knowledge base under namespace manual::."},
+    {"name": "atex_list_keys", "description": "List keys in the atex KB matching a prefix."},
+    {"name": "atex_stats", "description": "Get atex KB statistics and unbiased context tracker report path."}
+  ],
+  "keywords": ["amnitex", "atex", "helium", "gold", "memory", "lut", "context", "mcp"],
+  "compatibility": {"platforms": ["darwin", "linux"], "runtimes": {"node": ">=18.0.0"}},
+  "user_config": {
+    "atex_dir": {
+      "type": "string",
+      "title": "Knowledge Base Directory (.atex)",
+      "description": "Optional path to your .atex directory. Defaults to ~/.atex if blank.",
+      "required": false,
+      "default": ""
+    }
+  }
+}

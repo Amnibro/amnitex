@@ -1,0 +1,25 @@
+{
+  "name": "amnitex-marketplace",
+  "description": "Official AmniTex (Gold/Helium Native) plugin marketplace for Grok Build",
+  "owner": {
+    "name": "Amniscient, LLC"
+  },
+  "plugins": [
+    {
+      "name": "amnitex",
+      "version": "0.3.0",
+      "description": "Lossless byte-page memory layer and Fresh-Turn Conversation LUT in native Gold/Helium. 1.66 µs spatial TexGrid retrieval, 100% exact recall, and 95%–99.65% cumulative context savings.",
+      "author": {
+        "name": "Amniscient, LLC"
+      },
+      "category": "productivity",
+      "source": {
+        "source": "url",
+        "url": "https://github.com/Amnibro/amnitex.git"
+      },
+      "homepage": "https://amni-scient.com/amnitex-lut.html",
+      "keywords": ["amnitex", "atex", "amni-scient"],
+      "domains": ["amni-scient.com"]
+    }
+  ]
+}

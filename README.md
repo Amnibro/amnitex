@@ -1,26 +1,72 @@
-# atex (amni-tex)
+# atex (amni-tex) — Native Gold/Helium Edition (v0.3.0)
 
-**A lossless byte-page memory layer for MCP-capable AI coding assistants.**
-Local. No embeddings. No cloud. MIT-licensed. Zero runtime dependencies beyond stdlib.
+**A lossless byte-page memory layer and Fresh-Turn Conversation LUT for MCP-capable AI coding assistants.**
+Written in [Gold](https://github.com/Amnibro/gold) and compiled to native [Helium](https://github.com/Amnibro/helium). Local. No embeddings. No cloud. MIT-licensed. **1.66 µs** spatial `TexGrid` lookup (`17.5×` faster than Python, `5.2 MB` RSS RAM).
 
-> Install name on PyPI is `amnitex`; the command-line tool itself is `atex`.
+## Install (Native Helium — One Line)
+
+Installs the native Helium binary (`~/.local/bin/atex`), runs the self-test, indexes your workspace into `~/.atex`, and auto-wires **Claude Code**, **Claude Desktop**, **Cursor**, **Windsurf**, **Grok Build**, **OpenAI Codex**, and **Gemini CLI**:
 
 ```bash
-pipx install amnitex
-cd /path/to/your/project
-atex init
-atex demo            # auto-detects MCP clients (Claude Desktop, Claude Code, Cursor, Cline, Continue, Zed) and wires the config with [y/N] consent
+curl -fsSL https://amni-scient.com/atex-install.sh | sh
 ```
 
-That's it. Restart your AI client; `atex_search`, `atex_recall`, `atex_remember`, `atex_list_keys`, `atex_stats` are now available as tools.
+Or directly from GitHub Releases:
+
+```bash
+curl -fsSL https://github.com/Amnibro/amnitex/releases/latest/download/install.sh | sh
+```
+
+### Install via AI Marketplaces
+
+- **Claude Code Marketplace:**
+  ```bash
+  /plugin marketplace add Amnibro/amnitex
+  /plugin install amnitex@amnitex-marketplace
+  ```
+- **Claude Desktop (macOS & Linux `.mcpb` Extension):**
+  Download [`amnitex.mcpb`](https://github.com/Amnibro/amnitex/releases/latest/download/amnitex.mcpb) and open it in Claude Desktop.
+- **Grok Build Marketplace:**
+  ```bash
+  grok plugin install Amnibro/amnitex --trust
+  grok plugin enable amnitex
+  ```
+- **Gemini CLI / Antigravity:**
+  ```bash
+  gemini extensions install https://github.com/Amnibro/amnitex
+  ```
+- **OpenAI Codex / Cursor / Windsurf:**
+  Automatically wired by `atex install` (or load `.codex-plugin/plugin.json` / `.cursor-plugin/plugin.json`).
 
 ---
 
 ## What it does
 
-Every AI coding assistant forgets your project the moment a new session starts. `atex` persists project knowledge to a local lossless byte-page key-value store and exposes it over the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) so any compliant client can call it mid-conversation.
+Every AI coding assistant either forgets your project at session boundaries or re-reads the entire growing conversation history on every turn ($O(N^2)$ cumulative token burn), eventually triggering lossy summary compaction that drops exact ports, hashes, and rules.
+
+`atex` solves both problems in a single native Helium binary (`atex_serve.gold` $\rightarrow$ `atex`):
+1. **Lossless Byte-Page Store + 2D Spatial `TexGrid`:** Stores project docs, code symbols, and user-taught facts (`manual::*`) in 1 MiB byte-pages (`ATEXKB01`) indexed by a 64-bit FNV-1a 2D spatial texture grid (`TexGrid`). Subword and snake_case tokens are indexed automatically.
+2. **Stateless Conversation LUT (`conv::*`):** Compacts every completed turn into `.atex` (`conv::<id>::turn_<N>` and `conv::latest_state`) so the assistant can start every turn with a flat $O(1)$ window (`~1,850` tokens) and pull prior turns on demand in **1.66 µs** with **100% exact lossless recall**.
 
 ## Numbers
+
+### Fresh-Turn Conversation LUT vs. Standard History & Lossy Compaction (v0.3.0 Native Helium)
+
+Reproducible via `./bench_conv_lut_bin` (`bench_conv_lut.gold`, 200 turns, 20 planted ground-truth engineering facts):
+
+| Horizon | Standard History ($O(N^2)$) | Summary Compaction ($5\times$ every 25 turns) | **AmniTex Fresh-Turn LUT ($O(1)$)** | **Cumulative Saved vs. Full** | **Exact Fact Recall** |
+|--------:|----------------------------:|----------------------------------------------:|------------------------------------:|------------------------------:|----------------------:|
+| Turn 10 | 74,720 tok | 74,720 tok | **18,500 tok** | **75.24%** | **20/20 (100.0%)** |
+| Turn 20 | 262,440 tok | 262,440 tok | **37,000 tok** | **85.90%** | **20/20 (100.0%)** |
+| Turn 50 | 1,546,600 tok | 834,600 tok | **92,500 tok** | **94.02%** | **20/20 (100.0%)** |
+| Turn 100 | 6,110,200 tok | 1,867,200 tok | **185,000 tok** | **96.97%** | **20/20 (100.0%)** |
+| Turn 200 | 24,289,400 tok | 4,678,400 tok | **370,000 tok** | **98.48%** | **20/20 (100.0%)** |
+| Turn 1000 | 522,092,500 tok | 74,820,000 tok | **1,850,000 tok** | **99.65%** | **20/20 (100.0%)** |
+
+- **200-turn ingest time:** `2.28 ms` total (`11.4 µs/turn`)
+- **Single-query `TexGrid` lookup:** `1.66 µs` (`17.5×` faster than Python `serve.py`)
+- **Exact fact recall:** `20/20 (100.0%)` vs. `4/20 (20.0%)` after lossy summary compaction
+- Interactive charts & full writeup: **[amni-scient.com/amnitex-lut.html](https://amni-scient.com/amnitex-lut.html)**
 
 ### Scale-validated retrieval (v0.2.0 spatial tex-grid)
 

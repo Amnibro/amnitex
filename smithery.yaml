@@ -1,0 +1,14 @@
+startCommand:
+  type: stdio
+  configSchema:
+    type: object
+    properties:
+      atexDir:
+        type: string
+        description: Path to the local .atex knowledge base directory
+        default: ".atex"
+  commandFunction: |-
+    (config) => ({
+      command: 'atex',
+      args: ['serve', '--atex-dir', config.atexDir || '.atex']
+    })

@@ -1,0 +1,26 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-07-09/server.schema.json",
+  "name": "io.github.Amnibro/amnitex",
+  "description": "Lossless byte-page memory layer and Fresh-Turn Conversation LUT in native Gold/Helium (1.66 µs lookup).",
+  "repository": {
+    "url": "https://github.com/Amnibro/amnitex",
+    "source": "github"
+  },
+  "version_detail": {
+    "version": "0.3.0"
+  },
+  "packages": [
+    {
+      "registry_name": "mcpb",
+      "name": "https://github.com/Amnibro/amnitex/releases/latest/download/amnitex.mcpb",
+      "version": "0.3.0",
+      "runtime_hint": "native-helium",
+      "package_arguments": [
+        {
+          "type": "positional",
+          "value_hint": "serve"
+        }
+      ]
+    }
+  ]
+}

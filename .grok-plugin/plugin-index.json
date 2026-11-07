@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "plugins": {
+    "amnitex": {
+      "components": {
+        "skills": [
+          {
+            "name": "amnitex",
+            "description": "Lossless byte-page memory layer and Fresh-Turn LUT in native Gold/Helium."
+          }
+        ],
+        "commands": [
+          {
+            "name": "atex",
+            "description": "Initialize, inspect, or wire the native Gold/Helium AmniTex byte-page memory layer and Fresh-Turn LUT."
+          }
+        ]
+      }
+    }
+  }
+}

@@ -1,0 +1,838 @@
+use os
+use json
+use dictionary
+into atex_serve.amni
+
+```amni
+import os;
+import json;
+import dictionary;
+struct Page { fname byte[..64], idx int, used int }
+struct Entry { key byte[>..], page int, off int, len int, src_bytes int }
+struct Hit { id int, score int }
+var ADIR byte[>..];
+var PAGES Page[>..];
+var PDATA byte[>..][>..];
+var ENTRIES Entry[>..];
+var KMAP dictionary<const byte[:], int>;
+var GW = 256;
+var GH = 256;
+var GCELLS int[>..];
+var GNEXT byte[>..];
+var GOVF int[>..];
+var GBUILT = false;
+var SEEN uint[>..];
+var GEN uint = 1;
+var LAST_MTIME = 0;
+var PAGE_W = 4096;
+var PAGE_H = 64;
+var PAGE_BYTES = 1048576;
+fn is_stop(w const byte[:]) bool {
+	let n = w.len;
+	if n > 7 { return false; }
+	let c0 = w[0];
+	if n == 2 { return w == "to" || w == "in" || w == "is" || w == "of" || w == "or" || w == "on" || w == "at" || w == "by" || w == "as" || w == "it" || w == "be" || w == "do" || w == "an" || w == "my"; }
+	if n == 3 { return w == "the" || w == "and" || w == "for" || w == "are" || w == "how" || w == "can" || w == "use" || w == "any" || w == "has" || w == "get" || w == "set" || w == "put"; }
+	if n == 4 { return (c0 == 't' && (w == "this" || w == "that" || w == "tell")) || (c0 == 'w' && (w == "what" || w == "with" || w == "will")) || w == "from" || w == "some" || w == "have" || w == "make" || w == "show" || w == "give" || w == "help"; }
+	if n == 5 { return w == "using" || w == "would" || w == "could"; }
+	w == "should" || w == "please"
+}
+fn is_tok_start(c byte) bool { (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') }
+fn is_tok_cont(c byte) bool { is_tok_start(c) || (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.' }
+fn auto_dim(n int) int {
+	if n <= 0 { return 256; }
+	let t = max(256, n * 16);
+	var s = 1;
+	while s * s < t { s *= 2; }
+	min(s, 4096)
+}
+fn ensure_page_loaded(p int) {
+	while PDATA.len <= p {
+		var empty byte[>..] = [];
+		PDATA.push(copy(empty));
+	}
+	if PDATA[p].len == 0 && p < PAGES.len {
+		let path = str(ADIR, "/pages/", PAGES[p].fname);
+		read_file(path, PDATA[p]);
+	}
+}
+fn entry_text(id int) const byte[:] {
+	let e .= ENTRIES[id];
+	ensure_page_loaded(e.page);
+	let d .= PDATA[e.page];
+	if e.off >= 0 && e.off + e.len <= d.len { d[e.off..e.off + e.len] } else { "" }
+}
+fn grid_put_word(w const byte[:], eid int, mask uint, sh uint) {
+	if w.len < 2 || is_stop(w) { return; }
+	let h = hash(w);
+	let sidx = (h & 4095) as int;
+	let tag = (h & 0xfffffffffffff000) | (GEN & 4095);
+	if SEEN[sidx] != tag {
+		SEEN[sidx] = tag;
+		let x = (h & mask) as int;
+		let y = ((h >> sh) & mask) as int;
+		let c = y * GW + x;
+		let sl = GNEXT[c] as int;
+		if sl < 4 {
+			GCELLS[c * 4 + sl] = eid;
+			GNEXT[c] = (sl + 1) as byte;
+		} else {
+			let prev = GCELLS[c * 4 + 3];
+			let head = if sl == 4 {
+				let hidx = GOVF.len;
+				GOVF.push(prev);
+				GOVF.push(-1);
+				GNEXT[c] = 5;
+				hidx
+			} else { prev };
+			let nidx = GOVF.len;
+			GOVF.push(eid);
+			GOVF.push(head);
+			GCELLS[c * 4 + 3] = nidx;
+		}
+	}
+}
+fn index_text(s const byte[:], eid int) {
+	var i = 0;
+	var w byte[..128] = [];
+	var sub byte[..128] = [];
+	let mask = (GW - 1) as uint;
+	let sh = (63 - clz(GW as uint)) as uint;
+	while i < s.len {
+		if is_tok_start(s[i]) {
+			let a = i;
+			i += 1;
+			while i < s.len && is_tok_cont(s[i]) { i += 1; }
+			if i - a >= 2 {
+				w.clear();
+				var has_sep = false;
+				for k in a..min(i, a + 128) {
+					let lc = lower(s[k]);
+					if lc == '_' || lc == '-' || lc == '.' { has_sep = true; }
+					w.push(lc);
+				}
+				grid_put_word(w[..], eid, mask, sh);
+				if has_sep {
+					sub.clear();
+					for k in 0..w.len {
+						let c = w[k];
+						if c == '_' || c == '-' || c == '.' {
+							grid_put_word(sub[..], eid, mask, sh);
+							sub.clear();
+						} else { sub.push(c); }
+					}
+					grid_put_word(sub[..], eid, mask, sh);
+				}
+			}
+		} else { i += 1; }
+	}
+}
+fn grid_insert(id int, key const byte[:], text const byte[:]) {
+	if SEEN.len < 4096 { SEEN.resize(4096, 0); }
+	GEN += 1;
+	let eid = id + 1;
+	index_text(key, eid);
+	index_text(text, eid);
+}
+fn build_grid() {
+	GW = auto_dim(ENTRIES.len);
+	GH = GW;
+	GCELLS.clear();
+	GCELLS.resize(GW * GH * 4, 0);
+	GNEXT.clear();
+	GNEXT.resize(GW * GH, 0);
+	GOVF.clear();
+	for i in 0..ENTRIES.len { grid_insert(i, ENTRIES[i].key[..], entry_text(i)); }
+	GBUILT = true;
+}
+fn grid_query(q const byte[:], k int) Hit[>..] {
+	if !GBUILT { build_grid(); }
+	var scores = dictionary<int, int> {};
+	var i = 0;
+	var w byte[..128] = [];
+	let mask = (GW - 1) as uint;
+	let sh = (63 - clz(GW as uint)) as uint;
+	while i < q.len {
+		if is_tok_start(q[i]) {
+			let a = i;
+			i += 1;
+			while i < q.len && is_tok_cont(q[i]) { i += 1; }
+			if i - a >= 2 {
+				w.clear();
+				for m in a..min(i, a + 128) { w.push(lower(q[m])); }
+				if !is_stop(w[..]) {
+					let h = hash(w[..]);
+					let x = (h & mask) as int;
+					let y = ((h >> sh) & mask) as int;
+					let c = y * GW + x;
+					let n = GNEXT[c] as int;
+					if n <= 4 {
+						for sl in 0..n {
+							let eid = GCELLS[c * 4 + sl];
+							if eid > 0 { update(scores, eid - 1, 0) { it += 1; }; }
+						}
+					} else {
+						for sl in 0..3 {
+							let eid = GCELLS[c * 4 + sl];
+							if eid > 0 { update(scores, eid - 1, 0) { it += 1; }; }
+						}
+						var cur = GCELLS[c * 4 + 3];
+						while cur >= 0 {
+							let eid = GOVF[cur];
+							if eid > 0 { update(scores, eid - 1, 0) { it += 1; }; }
+							cur = GOVF[cur + 1];
+						}
+					}
+				}
+			}
+		} else { i += 1; }
+	}
+	var hits Hit[>..] = [];
+	each(scores) { id, sc => hits.push(Hit { id: id, score: sc }); };
+	sort(hits[..]) { a, b => a.score > b.score || (a.score == b.score && a.id < b.id) };
+	var out Hit[>..] = [];
+	for j in 0..min(k, hits.len) { out.push(hits[j]); }
+	out
+}
+fn flush_index() {
+	var out byte[>..] = [];
+	out.append("{\"schema_version\":1,\"magic\":\"ATEXKB01\",\"page_w\":");
+	format(out, PAGE_W);
+	out.append(",\"page_h\":");
+	format(out, PAGE_H);
+	out.append(",\"pages\":[");
+	for i in 0..PAGES.len {
+		if i > 0 { out.push(','); }
+		out.append("{\"filename\":");
+		json::format_string(out, PAGES[i].fname[..]);
+		out.append(",\"idx\":");
+		format(out, PAGES[i].idx);
+		out.append(",\"used_bytes\":");
+		format(out, PAGES[i].used);
+		out.append(",\"created\":\"2026-11-07T00:00:00Z\"}");
+	}
+	out.append("],\"entries\":{");
+	for i in 0..ENTRIES.len {
+		if i > 0 { out.push(','); }
+		json::format_key(out, ENTRIES[i].key[..]);
+		out.append("{\"page_idx\":");
+		format(out, ENTRIES[i].page);
+		out.append(",\"offset\":");
+		format(out, ENTRIES[i].off);
+		out.append(",\"length\":");
+		format(out, ENTRIES[i].len);
+		out.append(",\"meta\":{\"source_bytes\":");
+		format(out, ENTRIES[i].src_bytes);
+		out.append("}}");
+	}
+	out.append("},\"n_entries\":");
+	format(out, ENTRIES.len);
+	out.append(",\"tokenizer\":\"utf-8_bytes\",\"created\":\"2026-11-07T00:00:00Z\"}");
+	let idx_p = str(ADIR, "/index.json");
+	write_file_atomic(idx_p, out[..]);
+	LAST_MTIME = file_mtime(idx_p);
+}
+fn ensure_kb_dirs(dir const byte[:]) {
+	if ADIR[..] != dir { ADIR.clear(); ADIR.append(dir); }
+	make_dir(ADIR[..]);
+	make_dir(str(ADIR, "/pages"));
+	make_dir(str(ADIR, "/manual"));
+}
+fn load_kb(dir const byte[:]) bool {
+	if ADIR[..] != dir { ADIR.clear(); ADIR.append(dir); }
+	let idx_path = str(ADIR, "/index.json");
+	var raw byte[>..] = [];
+	if !read_file(idx_path, raw) {
+		ensure_kb_dirs(dir);
+		PAGES.clear();
+		PDATA.clear();
+		ENTRIES.clear();
+		clear(KMAP);
+		PAGE_BYTES = PAGE_W * PAGE_H * 4;
+		GBUILT = false;
+		flush_index();
+		return true;
+	}
+	LAST_MTIME = file_mtime(idx_path);
+	var r = json::reader(raw[..]);
+	PAGES.clear();
+	PDATA.clear();
+	ENTRIES.clear();
+	clear(KMAP);
+	var scratch byte[>..] = [];
+	json::each_member(r) { top_k =>
+		if top_k == "page_w" { PAGE_W = json::read_number(r) as int; }
+		else if top_k == "page_h" { PAGE_H = json::read_number(r) as int; }
+		else if top_k == "pages" {
+			json::each_element(r) {
+				var fnm byte[..64] = [];
+				var idx = 0;
+				var ub = 0;
+				json::each_member(r) { pk =>
+					if pk == "filename" { fnm.append(json::read_string(r, scratch)); }
+					else if pk == "idx" { idx = json::read_number(r) as int; }
+					else if pk == "used_bytes" { ub = json::read_number(r) as int; }
+					else { json::skip_value(r); }
+				};
+				PAGES.push(Page { fname: fnm, idx: idx, used: ub });
+			};
+		} else if top_k == "entries" {
+			reserve(KMAP, 1024);
+			json::each_member(r) { ek =>
+				var ky byte[>..] = [];
+				ky.append(ek);
+				var pi = 0;
+				var of = 0;
+				var ln = 0;
+				var sb = 0;
+				json::each_member(r) { fk =>
+					if fk == "page_idx" { pi = json::read_number(r) as int; }
+					else if fk == "offset" { of = json::read_number(r) as int; }
+					else if fk == "length" { ln = json::read_number(r) as int; }
+					else if fk == "meta" {
+						json::each_member(r) { mk =>
+							if mk == "source_bytes" || mk == "parent_bytes" {
+								let v = json::read_number(r) as int;
+								if sb == 0 { sb = v; }
+							} else { json::skip_value(r); }
+						};
+					} else { json::skip_value(r); }
+				};
+				if sb == 0 { sb = if ln > 0 { ln } else { 2400 }; }
+				let id = ENTRIES.len;
+				ENTRIES.push(Entry { key: copy(ky), page: pi, off: of, len: ln, src_bytes: sb });
+				insert(KMAP, ENTRIES[id].key[..], id);
+			};
+		} else { json::skip_value(r); }
+	};
+	PAGE_BYTES = PAGE_W * PAGE_H * 4;
+	GBUILT = false;
+	true
+}
+fn valid_key(k const byte[:]) bool {
+	if k.len == 0 || k.len > 256 || find(k, "..") >= 0 { return false; }
+	var i = 0;
+	while i < k.len {
+		let c = k[i];
+		let ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.' || c == '/' || c == ':' || c == '(' || c == ')' || c == '\'' || c == ',';
+		if ok { i += 1; }
+		else if i + 3 <= k.len && k[i] == 0xE2 && k[i + 1] == 0x80 && k[i + 2] == 0x94 { i += 3; }
+		else { return false; }
+	}
+	true
+}
+fn put_kb_entry_mem(full_key const byte[:], text const byte[:], src_b int, write_pg bool) {
+	if PAGES.len == 0 {
+		var pg = Page { idx: 0, used: 0, .. };
+		pg.fname.append("page_000000.kb.page");
+		PAGES.push(pg);
+	}
+	var p = PAGES.len - 1;
+	ensure_page_loaded(p);
+	if PAGES[p].used + text.len > PAGE_BYTES {
+		if write_pg { write_file(str(ADIR, "/pages/", PAGES[p].fname), PDATA[p][..]); }
+		p = PAGES.len;
+		var pg = Page { idx: p, used: 0, .. };
+		format(pg.fname, "page_");
+		format_int(pg.fname, p, 10, 6, '0');
+		pg.fname.append(".kb.page");
+		PAGES.push(pg);
+		ensure_page_loaded(p);
+	}
+	if PDATA[p].len < PAGE_BYTES { PDATA[p].resize(PAGE_BYTES, 0); }
+	let off = PAGES[p].used;
+	for i in 0..text.len { PDATA[p][off + i] = text[i]; }
+	PAGES[p].used += text.len;
+	if write_pg { write_file(str(ADIR, "/pages/", PAGES[p].fname), PDATA[p][..]); }
+	let sb = if src_b > 0 { src_b } else { text.len };
+	if contains(KMAP, full_key) {
+		let id = get(KMAP, full_key, 0);
+		ENTRIES[id].page = p;
+		ENTRIES[id].off = off;
+		ENTRIES[id].len = text.len;
+		ENTRIES[id].src_bytes = sb;
+		if GBUILT { grid_insert(id, full_key, text); }
+	} else {
+		var ky byte[>..] = [];
+		ky.append(full_key);
+		let id = ENTRIES.len;
+		ENTRIES.push(Entry { key: copy(ky), page: p, off: off, len: text.len, src_bytes: sb });
+		insert(KMAP, ENTRIES[id].key[..], id);
+		if GBUILT { grid_insert(id, full_key, text); }
+	}
+}
+fn save_kb_entry(full_key const byte[:], text const byte[:]) {
+	put_kb_entry_mem(full_key, text, text.len, true);
+	flush_index();
+}
+fn resolve_default_dir(out byte[>..]&) {
+	if env("ATEX_DIR", out) && out.len > 0 { return; }
+	out.clear();
+	if is_dir(".atex") { out.append(".atex"); return; }
+	var hm byte[>..] = [];
+	if env("HOME", hm) && hm.len > 0 {
+		let ai_dir = str(hm, "/ai/.atex");
+		if is_dir(ai_dir) { out.append(ai_dir); return; }
+		out.append(str(hm, "/.atex"));
+		return;
+	}
+	out.append(".atex");
+}
+fn slugify_heading(h const byte[:], out byte[>..]&) {
+	out.clear();
+	var dash = false;
+	for i in 0..min(h.len, 48) {
+		let c = lower(h[i]);
+		if (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') {
+			out.push(c);
+			dash = false;
+		} else if !dash && out.len > 0 {
+			out.push('-');
+			dash = true;
+		}
+	}
+	while out.len > 0 && out[out.len - 1] == '-' { out.pop(); }
+}
+fn ingest_doc(ns const byte[:], rel const byte[:], path const byte[:]) int {
+	var raw byte[>..] = [];
+	if !read_file(path, raw) || raw.len == 0 || raw.len > 524288 { return 0; }
+	let full_k = str(ns, "::", rel);
+	put_kb_entry_mem(full_k[..], raw[..], raw.len, false);
+	var added = 1;
+	if ends_with(rel, ".md") {
+		var sec_title byte[>..] = [];
+		var sec_body byte[>..] = [];
+		for ln in split(raw[..], '\n') {
+			if starts_with(ln, "## ") || starts_with(ln, "# ") {
+				if sec_title.len > 0 && sec_body.len >= 32 {
+					var sl byte[>..] = [];
+					slugify_heading(sec_title[..], sl);
+					if sl.len > 0 {
+						let sk = str(full_k, "::", sl);
+						put_kb_entry_mem(sk[..], sec_body[..], raw.len, false);
+						added += 1;
+					}
+				}
+				sec_title.clear();
+				let off = if starts_with(ln, "## ") { 3 } else { 2 };
+				sec_title.append(trim(ln[off..]));
+				sec_body.clear();
+				sec_body.append(ln);
+				sec_body.push('\n');
+			} else if sec_title.len > 0 {
+				sec_body.append(ln);
+				sec_body.push('\n');
+			}
+		}
+		if sec_title.len > 0 && sec_body.len >= 32 {
+			var sl byte[>..] = [];
+			slugify_heading(sec_title[..], sl);
+			if sl.len > 0 {
+				let sk = str(full_k, "::", sl);
+				put_kb_entry_mem(sk[..], sec_body[..], raw.len, false);
+				added += 1;
+			}
+		}
+	}
+	added
+}
+fn is_indexable_file(name const byte[:]) bool {
+	ends_with(name, ".md") || ends_with(name, ".gold") || ends_with(name, ".he") || ends_with(name, ".amni") || ends_with(name, ".py") || ends_with(name, ".ts") || ends_with(name, ".rs") || ends_with(name, ".go") || ends_with(name, ".toml")
+}
+fn run_init(proj_dir const byte[:], kb_dir const byte[:]) {
+	ensure_kb_dirs(kb_dir);
+	load_kb(kb_dir);
+	var count = 0;
+	var hm byte[>..] = [];
+	if env("HOME", hm) && hm.len > 0 {
+		let gcl = str(hm, "/.claude/CLAUDE.md");
+		if file_exists(gcl) { count += ingest_doc("claude", "global", gcl[..]); }
+	}
+	var names byte[>..] = [];
+	if list_dir(proj_dir, names) {
+		for nm in split(names[..], '\n') {
+			if nm.len == 0 || nm[0] == '.' || nm == "node_modules" || nm == "dist" || nm == "build" || nm == "target" || nm == "venv" { continue; }
+			let full = if proj_dir == "." { str(nm) } else { str(proj_dir, "/", nm) };
+			if is_dir(full) {
+				var sub byte[>..] = [];
+				if list_dir(full, sub) {
+					for sn in split(sub[..], '\n') {
+						if sn.len == 0 || sn[0] == '.' { continue; }
+						let sfull = str(full, "/", sn);
+						if !is_dir(sfull) && is_indexable_file(sn) {
+							count += ingest_doc("project", str(nm, "/", sn)[..], sfull[..]);
+						}
+					}
+				}
+			} else if is_indexable_file(nm) {
+				count += ingest_doc("project", nm, full[..]);
+			}
+		}
+	}
+	for p in 0..PAGES.len {
+		ensure_page_loaded(p);
+		write_file(str(ADIR, "/pages/", PAGES[p].fname), PDATA[p][..]);
+	}
+	flush_index();
+	write_stdout(str("[atex init] indexed ", count, " entries (", ENTRIES.len, " total) into ", ADIR, " (gold/helium-native)\n")[..]);
+	flush_stdout();
+}
+fn wire_json_mcp(cfg_path const byte[:], bin_path const byte[:], kb_dir const byte[:]) bool {
+	var raw byte[>..] = [];
+	let exists = read_file(cfg_path, raw);
+	if exists && find(raw[..], "\"amnitex\"") >= 0 { return true; }
+	let entry = str("\"amnitex\":{\"command\":", json_str(bin_path), ",\"args\":[\"serve\",\"--atex-dir\",", json_str(kb_dir), "]}");
+	var out byte[>..] = [];
+	if !exists || trim(raw[..]).len == 0 {
+		out.append("{\n  \"mcpServers\": {\n    ");
+		out.append(entry);
+		out.append("\n  }\n}\n");
+	} else {
+		write_file(str(cfg_path, ".atex-backup"), raw[..]);
+		let pos = find(raw[..], "\"mcpServers\"");
+		if pos >= 0 {
+			let br = find(raw[pos..], "{");
+			if br >= 0 {
+				let ins = pos + br + 1;
+				var rest = trim(raw[ins..]);
+				let empty_obj = rest.len > 0 && rest[0] == '}';
+				out.append(raw[..ins]);
+				out.append("\n    ");
+				out.append(entry);
+				if !empty_obj { out.push(','); }
+				out.append(raw[ins..]);
+			} else { return false; }
+		} else {
+			let lbr = rfind(raw[..], "}");
+			if lbr > 0 {
+				let pre = trim(raw[..lbr]);
+				out.append(raw[..lbr]);
+				if pre.len > 1 && pre[pre.len - 1] != '{' && pre[pre.len - 1] != ',' { out.push(','); }
+				out.append("\n  \"mcpServers\": {\n    ");
+				out.append(entry);
+				out.append("\n  }\n}\n");
+			} else { return false; }
+		}
+	}
+	write_file_atomic(cfg_path, out[..])
+}
+fn json_str(s const byte[:]) byte[>..] {
+	var b byte[>..] = [];
+	json::format_string(b, s);
+	b
+}
+fn run_install(bin_arg const byte[:], kb_dir const byte[:]) {
+	ensure_kb_dirs(kb_dir);
+	load_kb(kb_dir);
+	var hm byte[>..] = [];
+	env("HOME", hm);
+	var rd byte[>..] = [];
+	let bin_path = if resource_dir(rd) && rd.len > 0 && file_exists(str(rd, "/atex")) { str(rd, "/atex") } else if file_exists(str(hm, "/.local/bin/atex")) { str(hm, "/.local/bin/atex") } else { str(bin_arg) };
+	var wired = 0;
+	if hm.len > 0 {
+		if wire_json_mcp(str(hm, "/.claude.json")[..], bin_path[..], kb_dir) {
+			write_stdout("  + wired Claude Code (~/.claude.json)\n");
+			wired += 1;
+		}
+		make_dir(str(hm, "/.cursor"));
+		if wire_json_mcp(str(hm, "/.cursor/mcp.json")[..], bin_path[..], kb_dir) {
+			write_stdout("  + wired Cursor (~/.cursor/mcp.json)\n");
+			wired += 1;
+		}
+		if is_dir(str(hm, "/.codeium/windsurf")) || is_dir(str(hm, "/.codeium")) {
+			make_dir(str(hm, "/.codeium/windsurf"));
+			if wire_json_mcp(str(hm, "/.codeium/windsurf/mcp_config.json")[..], bin_path[..], kb_dir) {
+				write_stdout("  + wired Windsurf (~/.codeium/windsurf/mcp_config.json)\n");
+				wired += 1;
+			}
+		}
+		if is_dir(str(hm, "/.gemini")) {
+			make_dir(str(hm, "/.gemini"));
+			if wire_json_mcp(str(hm, "/.gemini/settings.json")[..], bin_path[..], kb_dir) {
+				write_stdout("  + wired Gemini CLI (~/.gemini/settings.json)\n");
+				wired += 1;
+			}
+		}
+		if is_dir(str(hm, "/.config/Claude")) {
+			if wire_json_mcp(str(hm, "/.config/Claude/claude_desktop_config.json")[..], bin_path[..], kb_dir) {
+				write_stdout("  + wired Claude Desktop (~/.config/Claude/claude_desktop_config.json)\n");
+				wired += 1;
+			}
+		}
+		if is_dir(str(hm, "/Library/Application Support/Claude")) {
+			if wire_json_mcp(str(hm, "/Library/Application Support/Claude/claude_desktop_config.json")[..], bin_path[..], kb_dir) {
+				write_stdout("  + wired Claude Desktop (macOS Application Support)\n");
+				wired += 1;
+			}
+		}
+		if is_dir(str(hm, "/.codex")) {
+			let cx = str(hm, "/.codex/config.toml");
+			var raw byte[>..] = [];
+			read_file(cx, raw);
+			if find(raw[..], "mcp_servers.amnitex") < 0 {
+				let blk = str("\n[mcp_servers.amnitex]\ncommand = ", json_str(bin_path[..]), "\nargs = [\"serve\", \"--atex-dir\", ", json_str(kb_dir), "]\n");
+				append_file(cx, blk[..]);
+			}
+			write_stdout("  + wired OpenAI Codex (~/.codex/config.toml)\n");
+			wired += 1;
+		}
+		if is_dir(str(hm, "/.grok")) {
+			let gx = str(hm, "/.grok/config.toml");
+			var graw byte[>..] = [];
+			read_file(gx, graw);
+			if find(graw[..], "mcp_servers.amnitex") < 0 {
+				let gblk = str("\n[mcp_servers.amnitex]\ncommand = ", json_str(bin_path[..]), "\nargs = [\"serve\", \"--atex-dir\", ", json_str(kb_dir), "]\n");
+				append_file(gx, gblk[..]);
+			}
+			write_stdout("  + wired Grok Build (~/.grok/config.toml)\n");
+			wired += 1;
+		}
+	}
+	write_stdout(str("[atex install] wired ", wired, " AI clients -> ", bin_path, " (kb=", kb_dir, ")\n")[..]);
+	flush_stdout();
+}
+fn run_selftest() int {
+	let tdir = "/tmp/atex-selftest-kb";
+	delete_file(str(tdir, "/index.json"));
+	delete_file(str(tdir, "/pages/page_000000.kb.page"));
+	ensure_kb_dirs(tdir);
+	load_kb(tdir);
+	save_kb_entry("manual::probe_fact", "PORT_9471_UDP is the primary telemetry port for AmniTex Helium.");
+	let hits = grid_query("telemetry udp port", 3);
+	let ok = hits.len > 0 && ENTRIES[hits[0].id].key[..] == "manual::probe_fact" && find(entry_text(hits[0].id), "PORT_9471_UDP") >= 0;
+	delete_file(str(tdir, "/pages/page_000000.kb.page"));
+	delete_file(str(tdir, "/index.json"));
+	delete_dir(str(tdir, "/pages"));
+	delete_dir(str(tdir, "/manual"));
+	delete_dir(tdir);
+	if ok {
+		write_stdout("[atex selftest] PASS (gold/helium-native, recall=1/1, exact_match=true)\n");
+		flush_stdout();
+		0
+	} else {
+		write_stderr("[atex selftest] FAIL\n");
+		1
+	}
+}
+fn write_id(out byte[>..]&, d json::Doc&, id_node int) {
+	out.append("\"id\":");
+	if id_node < 0 { out.append("null"); } else { json::format_node(out, d, id_node); }
+}
+fn send_ok_text(d json::Doc&, id_node int, text const byte[:], is_err bool) {
+	var out byte[>..] = [];
+	out.append("{\"jsonrpc\":\"2.0\",");
+	write_id(out, d, id_node);
+	out.append(",\"result\":{\"content\":[{\"type\":\"text\",\"text\":");
+	json::format_string(out, text);
+	out.append("}],\"isError\":");
+	out.append(if is_err { "true" } else { "false" });
+	out.append("}}\n");
+	write_stdout(out[..]);
+	flush_stdout();
+}
+fn send_err(d json::Doc&, id_node int, code int, msg const byte[:]) {
+	var out byte[>..] = [];
+	out.append("{\"jsonrpc\":\"2.0\",");
+	write_id(out, d, id_node);
+	out.append(",\"error\":{\"code\":");
+	format(out, code);
+	out.append(",\"message\":");
+	json::format_string(out, msg);
+	out.append("}}\n");
+	write_stdout(out[..]);
+	flush_stdout();
+}
+fn format_stats_line() byte[>..] {
+	var used = 0;
+	for pg in PAGES { used += pg.used; }
+	let cap = PAGES.len * PAGE_BYTES;
+	let util = if cap > 0 { (used as real / cap as real) * 100.0 } else { 0.0 };
+	str("entries=", ENTRIES.len, " pages=", PAGES.len, " used=", fmt(used as real / 1000000.0, 2), "MB capacity=", fmt(cap as real / 1000000.0, 2), "MB fill=", fmt(util, 1), "% engine=gold/helium-native")
+}
+fn main() {
+	let av = args();
+	var dir byte[>..] = [];
+	var proj byte[>..] = [];
+	var cmd byte[>..] = [];
+	var i = 1;
+	while i < av.len {
+		let a = av[i];
+		if a == "--version" || a == "-v" {
+			write_stdout("atex 0.3.0 (gold/helium-native)\n");
+			flush_stdout();
+			return;
+		} else if a == "--help" || a == "-h" || a == "help" {
+			write_stdout("atex 0.3.0 (gold/helium-native)\nUsage:\n  atex [serve] [--atex-dir <dir>]     Run MCP stdio server\n  atex init [project_dir] [--atex-dir <dir>]  Index project docs & code into KB\n  atex install [--atex-dir <dir>]     Auto-wire Claude, Cursor, Windsurf, Gemini, Codex\n  atex stats [--atex-dir <dir>]       Print knowledge base statistics\n  atex --selftest                     Run end-to-end TexGrid & byte-page self-test\n");
+			flush_stdout();
+			return;
+		} else if a == "--selftest" || a == "selftest" {
+			run_selftest();
+			return;
+		} else if a == "--atex-dir" && i + 1 < av.len {
+			dir.clear();
+			dir.append(av[i + 1]);
+			i += 2;
+		} else if cmd.len == 0 && (a == "serve" || a == "init" || a == "install" || a == "stats") {
+			cmd.append(a);
+			i += 1;
+		} else if cmd == "init" && proj.len == 0 && a[0] != '-' {
+			proj.append(a);
+			i += 1;
+		} else { i += 1; }
+	}
+	if dir.len == 0 { resolve_default_dir(dir); }
+	if cmd == "init" {
+		if proj.len == 0 { proj.append("."); }
+		run_init(proj[..], dir[..]);
+		return;
+	}
+	if cmd == "install" {
+		let b0 = if av.len > 0 { av[0] } else { "atex" };
+		run_install(b0, dir[..]);
+		return;
+	}
+	if !load_kb(dir[..]) {
+		write_stderr("[atex serve] ERROR: failed to load or create index.json\n");
+		return;
+	}
+	if cmd == "stats" {
+		let st = format_stats_line();
+		write_stdout(str(st, "\n")[..]);
+		flush_stdout();
+		return;
+	}
+	var line byte[>..] = [];
+	var d = json::Doc {};
+	while read_line(line) {
+		let s = trim(line[..]);
+		if s.len == 0 { line.clear(); continue; }
+		let root, err = json::parse(s, d);
+		if root < 0 {
+			send_err(d, -1, -32700, "parse error");
+			line.clear();
+			continue;
+		}
+		let id_node = json::member(d, root, "id");
+		let m, _ = json::as_string(d, json::member(d, root, "method"));
+		if m == "initialized" || m == "notifications/initialized" { line.clear(); continue; }
+		if m == "initialize" {
+			var out byte[>..] = [];
+			out.append("{\"jsonrpc\":\"2.0\",");
+			write_id(out, d, id_node);
+			out.append(",\"result\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"atex-gold\",\"version\":\"0.3.0\"}}}\n");
+			write_stdout(out[..]);
+			flush_stdout();
+		} else if m == "tools/list" {
+			var out byte[>..] = [];
+			out.append("{\"jsonrpc\":\"2.0\",");
+			write_id(out, d, id_node);
+			out.append(",\"result\":{\"tools\":[{\"name\":\"atex_search\",\"description\":\"Search the local atex knowledge base (spatial tex-grid) for entries matching a query. Use this FIRST before reading full files, grepping, or asking the user to re-explain CLAUDE.md rules, repo structure, or build paths.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\",\"description\":\"Search keywords\"},\"k\":{\"type\":\"integer\",\"default\":3},\"max_chars\":{\"type\":\"integer\",\"default\":600}},\"required\":[\"query\"]}},{\"name\":\"atex_recall\",\"description\":\"Exact-key lookup in the atex knowledge base. Returns the stored text or null if the key does not exist.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"key\":{\"type\":\"string\"},\"max_chars\":{\"type\":\"integer\",\"default\":2400}},\"required\":[\"key\"]}},{\"name\":\"atex_remember\",\"description\":\"Persist a learned fact to the atex knowledge base under namespace manual::.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"key\":{\"type\":\"string\"},\"text\":{\"type\":\"string\"}},\"required\":[\"key\",\"text\"]}},{\"name\":\"atex_list_keys\",\"description\":\"List keys in the atex KB matching a prefix.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"prefix\":{\"type\":\"string\",\"default\":\"\"},\"max\":{\"type\":\"integer\",\"default\":50}},\"required\":[\"prefix\"]}},{\"name\":\"atex_stats\",\"description\":\"Get atex KB statistics and unbiased context tracker report path for the current conversation.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{}}}]}}\n");
+			write_stdout(out[..]);
+			flush_stdout();
+		} else if m == "ping" {
+			var out byte[>..] = [];
+			out.append("{\"jsonrpc\":\"2.0\",");
+			write_id(out, d, id_node);
+			out.append(",\"result\":{}}\n");
+			write_stdout(out[..]);
+			flush_stdout();
+		} else if m == "shutdown" {
+			var out byte[>..] = [];
+			out.append("{\"jsonrpc\":\"2.0\",");
+			write_id(out, d, id_node);
+			out.append(",\"result\":null}\n");
+			write_stdout(out[..]);
+			flush_stdout();
+			break;
+		} else if m == "tools/call" {
+			let cur_mt = file_mtime(str(ADIR, "/index.json"));
+			if cur_mt > 0 && cur_mt != LAST_MTIME { load_kb(dir[..]); }
+			let p = json::member(d, root, "params");
+			let tname, _ = json::as_string(d, json::member(d, p, "name"));
+			let args_node = json::member(d, p, "arguments");
+			if tname == "atex_search" {
+				let q, _ = json::as_string(d, json::member(d, args_node, "query"));
+				let kv, okk = json::as_i64(d, json::member(d, args_node, "k"));
+				let mv, okm = json::as_i64(d, json::member(d, args_node, "max_chars"));
+				let k = if okk { kv } else { 3 };
+				let mc = if okm { mv } else { 600 };
+				let hits = grid_query(q, k);
+				if hits.len == 0 {
+					send_ok_text(d, id_node, "(no results)", false);
+				} else {
+					var res byte[>..] = [];
+					res.append("Reference docs (retrieved from knowledge base):");
+					for h in hits {
+						res.append("\n--- ");
+						res.append(ENTRIES[h.id].key[..]);
+						res.append(" (score=");
+						format(res, h.score);
+						res.append(")\n");
+						let txt = entry_text(h.id);
+						if txt.len > mc { res.append(txt[..mc]); res.append("..."); } else { res.append(txt); }
+					}
+					send_ok_text(d, id_node, res[..], false);
+				}
+			} else if tname == "atex_recall" {
+				let key, _ = json::as_string(d, json::member(d, args_node, "key"));
+				let mv, okm = json::as_i64(d, json::member(d, args_node, "max_chars"));
+				let mc = if okm { mv } else { 2400 };
+				if !valid_key(key) {
+					send_err(d, id_node, -32602, "tool atex_recall invalid input: invalid key");
+				} else if !contains(KMAP, key) {
+					send_ok_text(d, id_node, "(not found)", true);
+				} else {
+					let id = get(KMAP, key, 0);
+					let txt = entry_text(id);
+					if mc > 0 && txt.len > mc {
+						var res byte[>..] = [];
+						res.append(txt[..mc]);
+						res.append("\n... [truncated at ");
+						format(res, mc);
+						res.append(" of ");
+						format(res, txt.len);
+						res.append(" bytes; pass max_chars=0 for full text]");
+						send_ok_text(d, id_node, res[..], false);
+					} else {
+						send_ok_text(d, id_node, txt, false);
+					}
+				}
+			} else if tname == "atex_remember" {
+				let skey, _ = json::as_string(d, json::member(d, args_node, "key"));
+				let txt, okt = json::as_string(d, json::member(d, args_node, "text"));
+				if !valid_key(skey) || !okt || txt.len > 1048576 {
+					send_err(d, id_node, -32602, "tool atex_remember invalid input");
+				} else {
+					let fk = if starts_with(skey, "manual::") || starts_with(skey, "conv::") { str(skey) } else { str("manual::", skey) };
+					save_kb_entry(fk[..], txt);
+					send_ok_text(d, id_node, str("remembered as ", fk, " (", txt.len, " bytes)")[..], false);
+				}
+			} else if tname == "atex_list_keys" {
+				let pref, _ = json::as_string(d, json::member(d, args_node, "prefix"));
+				let mxv, okm = json::as_i64(d, json::member(d, args_node, "max"));
+				let mx = if okm { mxv } else { 50 };
+				var res byte[>..] = [];
+				var cnt = 0;
+				for i in 0..ENTRIES.len {
+					let k = ENTRIES[i].key[..];
+					if k.len >= pref.len && k[..pref.len] == pref {
+						if cnt > 0 { res.push('\n'); }
+						res.append(k);
+						cnt += 1;
+						if cnt >= mx { break; }
+					}
+				}
+				send_ok_text(d, id_node, if cnt > 0 { res[..] } else { "(no matches)" }, false);
+			} else if tname == "atex_stats" {
+				let txt = format_stats_line();
+				send_ok_text(d, id_node, txt[..], false);
+			} else {
+				send_err(d, id_node, -32601, str("unknown tool: ", tname)[..]);
+			}
+		} else if id_node >= 0 {
+			send_err(d, id_node, -32601, str("unknown method: ", m)[..]);
+		}
+		line.clear();
+	}
+}
+```
