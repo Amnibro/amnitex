@@ -1,7 +1,7 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-07-09/server.schema.json",
   "name": "io.github.Amnibro/amnitex",
-  "description": "Lossless byte-page memory layer and Fresh-Turn Conversation LUT in native Gold/Helium (1.66 µs lookup).",
+  "description": "Lossless local byte-page memory for MCP assistants in native Gold/Helium (1.66 µs lookup).",
   "repository": {
     "url": "https://github.com/Amnibro/amnitex",
     "source": "github"

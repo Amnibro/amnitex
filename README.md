@@ -1,7 +1,7 @@
 # atex (amni-tex) — Native Gold/Helium Edition (v0.3.0)
 
-**A lossless byte-page memory layer and Fresh-Turn Conversation LUT for MCP-capable AI coding assistants.**
-Written in [Gold](https://github.com/Amnibro/gold) and compiled to native [Helium](https://github.com/Amnibro/helium). Local. No embeddings. No cloud. MIT-licensed. **1.66 µs** spatial `TexGrid` lookup (`17.5×` faster than Python, `5.2 MB` RSS RAM).
+**A lossless local byte-page memory layer for MCP-capable AI coding assistants. It also stores every conversation turn so earlier facts can be recalled exactly.**
+Written in [Gold](https://github.com/Amnibro/gold) and compiled to native [Helium](https://github.com/Amnibro/helium). Local. No embeddings. No cloud. MIT-licensed. **1.66 µs** keyword lookup through a spatial `TexGrid`. Building the grid plus running 3 searches is `17.5×` faster than the earlier Python version, and the process uses `5.2 MB` RSS.
 
 ## Install (Native Helium — One Line)
 
@@ -46,17 +46,19 @@ curl -fsSL https://github.com/Amnibro/amnitex/releases/latest/download/install.s
 
 Every AI coding assistant either forgets your project at session boundaries or re-reads the entire growing conversation history on every turn ($O(N^2)$ cumulative token burn), eventually triggering lossy summary compaction that drops exact ports, hashes, and rules.
 
-`atex` solves both problems in a single native Helium binary (`atex_serve.gold` $\rightarrow$ `atex`):
+`atex` targets both problems with a single native Helium binary (`atex_serve.gold` $\rightarrow$ `atex`):
 1. **Lossless Byte-Page Store + 2D Spatial `TexGrid`:** Stores project docs, code symbols, and user-taught facts (`manual::*`) in 1 MiB byte-pages (`ATEXKB01`) indexed by a 64-bit FNV-1a 2D spatial texture grid (`TexGrid`). Subword and snake_case tokens are indexed automatically.
-2. **Stateless Conversation LUT (`conv::*`):** Compacts every completed turn into `.atex` (`conv::<id>::turn_<N>` and `conv::latest_state`) so the assistant can start every turn with a flat $O(1)$ window (`~1,850` tokens) and pull prior turns on demand in **1.66 µs** with **100% exact lossless recall**.
+2. **Conversation turn store (`conv::*`):** Saves every completed turn into `.atex` (`conv::<id>::turn_<N>` and `conv::latest_state`). Prior turns can be pulled back by keyword in **1.66 µs** without loss. The longer-term goal is a "fresh-turn" client that sends only a small fixed window each turn and recalls the rest from atex. **No current assistant client works this way yet**, so the token figures below are projections, not measured savings.
 
 ## Numbers
 
-### Fresh-Turn Conversation LUT vs. Standard History & Lossy Compaction (v0.3.0 Native Helium)
+### Projected: fresh-turn window vs. full history & lossy compaction (simulation, not measured)
 
-Reproducible via `./bench_conv_lut_bin` (`bench_conv_lut.gold`, 200 simulated turns, 20 planted ground-truth facts). Every number below is copied from [`conv_lut_bench_results.json`](conv_lut_bench_results.json). Token counts are from a deterministic simulation, not a live model.
+Reproducible via `./bench_conv_lut_bin` (`bench_conv_lut.gold`, 200 simulated turns, 20 planted ground-truth facts). Every number below is copied from [`conv_lut_bench_results.json`](conv_lut_bench_results.json).
 
-| Turn | Full history (cumulative input) | Rolling window + lossy summary every 7 turns | **AmniTex Fresh-Turn LUT** | **Saved vs. full history** |
+> **What is measured and what is assumed.** Measured: lookup latency, ingest time, and exact recall of the 20 planted facts (each query shares a keyword with its fact). Assumed: all token counts. They come from fixed constants in `bench_conv_lut.gold`: 4,850 tokens per raw turn, 1,750 per discarded turn, a 4,500-token summary block, and a 1,752-token fresh-turn window. The fresh-turn window leaves out the system prompt and tool schemas. The full-history baseline ignores prompt caching, which in practice cuts the cost of repeated prefixes a lot. The `2/20` recall for lossy summaries is a modeled rule, not a run against a real summarizer. A live A/B harness that uses API-reported token usage is in progress.
+
+| Turn | Full history (cumulative input) | Rolling window + lossy summary every 7 turns | **Fresh-turn window (hypothetical)** | **Projected saving vs. full history** |
 |-----:|--------------------------------:|---------------------------------------------:|---------------------------:|---------------------------:|
 | 5 | 170,970 tok | 29,110 tok | **8,760 tok** | **94.88%** |
 | 10 | 463,190 tok | 79,860 tok | **17,520 tok** | **96.22%** |
@@ -67,7 +69,7 @@ Reproducible via `./bench_conv_lut_bin` (`bench_conv_lut.gold`, 200 simulated tu
 
 - **200-turn ingest time:** `2.28 ms` total
 - **Single-query `TexGrid` lookup:** `1.66 µs`
-- **Exact fact recall at turn 200:** `20/20` with the LUT vs. `2/20` after lossy summary compaction
+- **Exact fact recall at turn 200:** `20/20` measured from the atex store (keyword-overlap queries). The `2/20` for lossy summaries is modeled, not measured
 - Interactive charts & full writeup: **[amni-scient.com/amnitex-lut.html](https://amni-scient.com/amnitex-lut.html)**
 
 ### Scale-validated retrieval (v0.2.0 spatial tex-grid)

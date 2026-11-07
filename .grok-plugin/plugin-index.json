@@ -6,13 +6,13 @@
         "skills": [
           {
             "name": "amnitex",
-            "description": "Lossless byte-page memory layer and Fresh-Turn LUT in native Gold/Helium."
+            "description": "Lossless byte-page memory layer and conversation turn store in native Gold/Helium."
           }
         ],
         "commands": [
           {
             "name": "atex",
-            "description": "Initialize, inspect, or wire the native Gold/Helium AmniTex byte-page memory layer and Fresh-Turn LUT."
+            "description": "Initialize, inspect, or wire the native Gold/Helium AmniTex byte-page memory layer."
           }
         ]
       }

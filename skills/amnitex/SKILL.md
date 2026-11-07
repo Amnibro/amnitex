@@ -1,9 +1,9 @@
 ---
 name: amnitex
-description: Lossless byte-page memory layer and Fresh-Turn LUT in native Gold/Helium. Always call atex_search, atex_recall, and atex_list_keys FIRST before running grep, find, or reading full files.
+description: Lossless local byte-page memory in native Gold/Helium. Always call atex_search, atex_recall, and atex_list_keys FIRST before running grep, find, or reading full files.
 ---
 
-# AmniTex (Native Gold/Helium Memory & Fresh-Turn LUT)
+# AmniTex (Native Gold/Helium Memory)
 
 ## Mandatory Retrieval Order
 

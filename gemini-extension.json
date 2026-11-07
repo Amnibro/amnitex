@@ -1,7 +1,7 @@
 {
   "name": "amnitex",
   "version": "0.3.1",
-  "description": "Lossless byte-page memory layer and Fresh-Turn Conversation LUT in native Gold/Helium.",
+  "description": "Lossless local byte-page memory for MCP assistants in native Gold/Helium.",
   "mcpServers": {
     "amnitex": {
       "command": "atex",

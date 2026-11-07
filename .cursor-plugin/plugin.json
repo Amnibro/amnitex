@@ -2,7 +2,7 @@
   "name": "amnitex",
   "displayName": "AmniTex (Native Helium LUT)",
   "version": "0.3.1",
-  "description": "Lossless byte-page memory layer and Fresh-Turn Conversation LUT in native Gold/Helium. 1.66 µs spatial TexGrid retrieval and 95%–99.65% cumulative context savings.",
+  "description": "Lossless local byte-page memory for MCP assistants in native Gold/Helium: 1.66 µs keyword lookup over a spatial TexGrid; stores every conversation turn for exact recall.",
   "author": {
     "name": "Amniscient, LLC",
     "url": "https://amni-scient.com"
