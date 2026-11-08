@@ -1,0 +1,23 @@
+# query	expected answer substring	file holding the answer
+telemetry port used by the selftest	PORT_9471_UDP	atex_serve.gold
+byte page size constant	PAGE_BYTES = 1048576	atex_serve.gold
+which words are treated as stop words	fn is_stop	atex_serve.gold
+environment variable that overrides the knowledge base directory	ATEX_DIR	atex_serve.gold
+windsurf mcp config file path	mcp_config.json	atex_serve.gold
+how codex gets wired in config toml	mcp_servers.amnitex	atex_serve.gold
+markdown heading slug for section keys	fn slugify_heading	atex_serve.gold
+largest file size ingest will accept	524288	atex_serve.gold
+mcp protocol version reported in initialize	2024-11-05	atex_serve.gold
+backup file written before editing client config	.atex-backup	atex_serve.gold
+claude desktop config path on macOS	Library/Application Support/Claude	atex_serve.gold
+one line install command curl	curl -fsSL https://amni-scient.com/atex-install.sh	README.md
+grok plugin install trust	grok plugin install Amnibro/amnitex --trust	README.md
+is the lossy summary recall measured or modeled	modeled rule	README.md
+tokens assumed per raw turn in the conversation benchmark	raw_turn_tok	bench_conv_lut.gold
+backoff interval for rpc_reconnect_loop	RETRY_BACKOFF_17MS	bench_conv_lut.gold
+supervisor angel heartbeat health pulses	CRON_HEARTBEAT_SEC_45	bench_conv_lut.gold
+default ollama server url	http://localhost:11434	atex/clients/ollama.py
+python keyword retriever key score	key_score	atex/retriever.py
+minimum python version	requires-python = ">=3.10"	pyproject.toml
+dogfood honest caveats	## Honest caveats	DOGFOOD.md
+changelog 0.2.1 release	## [0.2.1]	CHANGELOG.md

@@ -6,10 +6,13 @@ HC="${HC_BIN:-$H/build/hc}"
 HCLIB="${HC_LIB:-$H/hc/lib}"
 O="${OUT:-dist}"
 X="${MCPB:-npx -y @anthropic-ai/mcpb}"
-rm -rf "$O"
+rm -rf "$O" hclib
 mkdir -p "$O/pkg/amnitex-helium/bin" "$O/pkg/amnitex-helium/src"
-HC_LIB="$HCLIB" "$HC" build atex_serve.amni -o "$O/pkg/amnitex-helium/bin/atex-linux-x64"
-HC_LIB="$HCLIB" "$HC" build atex_serve.amni -o "$O/pkg/amnitex-helium/src/atex.c"
+ln -s "$HCLIB" hclib
+trap 'rm -f hclib' EXIT
+HC_LIB=hclib "$HC" build atex_serve.amni -o "$O/pkg/amnitex-helium/bin/atex-linux-x64"
+HC_LIB=hclib "$HC" build atex_serve.amni -o "$O/pkg/amnitex-helium/src/atex.c"
+if grep -q "$HOME" "$O/pkg/amnitex-helium/src/atex.c" "$O/pkg/amnitex-helium/bin/atex-linux-x64"; then echo "build embeds \$HOME path" >&2; exit 1; fi
 cp "$H/hc/hrt.h" "$O/pkg/amnitex-helium/src/hrt.h"
 cp atex_serve.gold atex_serve.amni "$O/pkg/amnitex-helium/src/"
 cp install.sh README.md LICENSE manifest.json mcpb-entry.mjs "$O/pkg/amnitex-helium/"

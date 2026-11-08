@@ -27,6 +27,8 @@ var LAST_MTIME = 0;
 var PAGE_W = 4096;
 var PAGE_H = 64;
 var PAGE_BYTES = 1048576;
+var DEF_K = 3;
+var DEF_MC = 600;
 fn is_stop(w const byte[:]) bool {
 	let n = w.len;
 	if n > 7 { return false; }
@@ -38,6 +40,19 @@ fn is_stop(w const byte[:]) bool {
 	w == "should" || w == "please"
 }
 fn is_tok_start(c byte) bool { (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') }
+fn is_tok_lead(c byte) bool { is_tok_start(c) || (c >= '0' && c <= '9') }
+fn is_plural(w const byte[:]) bool { w.len > 3 && w[w.len - 1] == 's' && w[w.len - 2] != 's' && is_tok_start(w[w.len - 2]) }
+fn has_word(h const byte[:], w const byte[:]) bool {
+	var from = 0;
+	while from < h.len {
+		let p = find(h[from..], w);
+		if p < 0 { return false; }
+		let at = from + p;
+		if at == 0 || !(is_tok_lead(h[at - 1])) { return true; }
+		from = at + 1;
+	}
+	false
+}
 fn is_tok_cont(c byte) bool { is_tok_start(c) || (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.' }
 fn auto_dim(n int) int {
 	if n <= 0 { return 256; }
@@ -63,6 +78,7 @@ fn entry_text(id int) const byte[:] {
 	if e.off >= 0 && e.off + e.len <= d.len { d[e.off..e.off + e.len] } else { "" }
 }
 fn grid_put_word(w const byte[:], eid int, mask uint, sh uint) {
+	if is_plural(w) { grid_put_word(w[..w.len - 1], eid, mask, sh); }
 	if w.len < 2 || is_stop(w) { return; }
 	let h = hash(w);
 	let sidx = (h & 4095) as int;
@@ -99,7 +115,7 @@ fn index_text(s const byte[:], eid int) {
 	let mask = (GW - 1) as uint;
 	let sh = (63 - clz(GW as uint)) as uint;
 	while i < s.len {
-		if is_tok_start(s[i]) {
+		if is_tok_lead(s[i]) {
 			let a = i;
 			i += 1;
 			while i < s.len && is_tok_cont(s[i]) { i += 1; }
@@ -145,54 +161,175 @@ fn build_grid() {
 	for i in 0..ENTRIES.len { grid_insert(i, ENTRIES[i].key[..], entry_text(i)); }
 	GBUILT = true;
 }
-fn grid_query(q const byte[:], k int) Hit[>..] {
-	if !GBUILT { build_grid(); }
-	var scores = dictionary<int, int> {};
-	var i = 0;
-	var w byte[..128] = [];
+struct QTerm { w byte[..128], wt int, cell int }
+var SN_B0 = 0;
+var SN_B1 = 0;
+fn lower_into(s const byte[:], out byte[>..]&) {
+	out.clear();
+	for c in s { out.push(lower(c)); }
+}
+fn add_qterm(terms QTerm[>..]&, w0 const byte[:]) {
+	let w = if is_plural(w0) { w0[..w0.len - 1] } else { w0 };
+	if w.len < 2 || is_stop(w) { return; }
+	for i in 0..terms.len { if terms[i].w[..] == w { return; } }
 	let mask = (GW - 1) as uint;
 	let sh = (63 - clz(GW as uint)) as uint;
+	let h = hash(w);
+	var t = QTerm { wt: 0, cell: (((h >> sh) & mask) as int) * GW + ((h & mask) as int), .. };
+	t.w.append(w);
+	terms.push(t);
+}
+fn query_terms(q const byte[:]) QTerm[>..] {
+	if !GBUILT { build_grid(); }
+	var terms QTerm[>..] = [];
+	var i = 0;
+	var w byte[..128] = [];
+	var sub byte[..128] = [];
 	while i < q.len {
-		if is_tok_start(q[i]) {
+		if is_tok_lead(q[i]) {
 			let a = i;
 			i += 1;
 			while i < q.len && is_tok_cont(q[i]) { i += 1; }
-			if i - a >= 2 {
-				w.clear();
-				for m in a..min(i, a + 128) { w.push(lower(q[m])); }
-				if !is_stop(w[..]) {
-					let h = hash(w[..]);
-					let x = (h & mask) as int;
-					let y = ((h >> sh) & mask) as int;
-					let c = y * GW + x;
-					let n = GNEXT[c] as int;
-					if n <= 4 {
-						for sl in 0..n {
-							let eid = GCELLS[c * 4 + sl];
-							if eid > 0 { update(scores, eid - 1, 0) { it += 1; }; }
-						}
-					} else {
-						for sl in 0..3 {
-							let eid = GCELLS[c * 4 + sl];
-							if eid > 0 { update(scores, eid - 1, 0) { it += 1; }; }
-						}
-						var cur = GCELLS[c * 4 + 3];
-						while cur >= 0 {
-							let eid = GOVF[cur];
-							if eid > 0 { update(scores, eid - 1, 0) { it += 1; }; }
-							cur = GOVF[cur + 1];
-						}
-					}
+			w.clear();
+			var has_sep = false;
+			for m in a..min(i, a + 128) {
+				let lc = lower(q[m]);
+				if lc == '_' || lc == '-' || lc == '.' { has_sep = true; }
+				w.push(lc);
+			}
+			add_qterm(terms, w[..]);
+			if has_sep {
+				sub.clear();
+				for m in 0..w.len {
+					let c = w[m];
+					if c == '_' || c == '-' || c == '.' { add_qterm(terms, sub[..]); sub.clear(); } else { sub.push(c); }
 				}
+				add_qterm(terms, sub[..]);
 			}
 		} else { i += 1; }
 	}
+	terms
+}
+fn cell_ids(c int, out int[>..]&) {
+	let n = GNEXT[c] as int;
+	if n <= 4 {
+		for sl in 0..n { let eid = GCELLS[c * 4 + sl]; if eid > 0 { out.push(eid - 1); } }
+	} else {
+		for sl in 0..3 { let eid = GCELLS[c * 4 + sl]; if eid > 0 { out.push(eid - 1); } }
+		var cur = GCELLS[c * 4 + 3];
+		while cur >= 0 {
+			let eid = GOVF[cur];
+			if eid > 0 { out.push(eid - 1); }
+			cur = GOVF[cur + 1];
+		}
+	}
+}
+fn rank(terms QTerm[>..]&, k int) Hit[>..] {
+	if !GBUILT { build_grid(); }
+	var scores = dictionary<int, int> {};
+	var ids int[>..] = [];
+	var total = 0;
+	let n = ENTRIES.len + 1;
+	for ti in 0..terms.len {
+		ids.clear();
+		cell_ids(terms[ti].cell, ids);
+		if ids.len == 0 { continue; }
+		sort(ids[..]) { a, b => a < b };
+		var df = 0;
+		for j in 0..ids.len { if j == 0 || ids[j] != ids[j - 1] { df += 1; } }
+		let r = max(1, (n * 4) / (df + 1));
+		let wt = (64 - clz(r as uint)) as int;
+		terms[ti].wt = wt;
+		total += wt;
+		for j in 0..ids.len { if j == 0 || ids[j] != ids[j - 1] { update(scores, ids[j], 0) { it += wt; }; } }
+	}
 	var hits Hit[>..] = [];
-	each(scores) { id, sc => hits.push(Hit { id: id, score: sc }); };
-	sort(hits[..]) { a, b => a.score > b.score || (a.score == b.score && a.id < b.id) };
+	var kl byte[>..] = [];
+	each(scores) { id, sc =>
+		if sc * 3 >= total {
+			var s = sc;
+			lower_into(ENTRIES[id].key[..], kl);
+			for ti in 0..terms.len { if terms[ti].wt > 0 && has_word(kl[..], terms[ti].w[..]) { s += terms[ti].wt; } }
+			if starts_with(ENTRIES[id].key[..], "manual::") { s += 2; }
+			hits.push(Hit { id: id, score: s });
+		}
+	};
+	sort(hits[..]) { a, b => a.score > b.score || (a.score == b.score && (ENTRIES[a.id].len < ENTRIES[b.id].len || (ENTRIES[a.id].len == ENTRIES[b.id].len && a.id < b.id))) };
 	var out Hit[>..] = [];
-	for j in 0..min(k, hits.len) { out.push(hits[j]); }
+	if hits.len == 0 { return out; }
+	let best = hits[0].score;
+	for h in hits {
+		if out.len >= k || h.score * 2 < best { break; }
+		let hk = ENTRIES[h.id].key[..];
+		var dup = false;
+		for o in out {
+			let ek = ENTRIES[o.id].key[..];
+			if (hk.len > ek.len && starts_with(hk, ek) && hk[ek.len] == ':') || (ek.len > hk.len && starts_with(ek, hk) && ek[hk.len] == ':') { dup = true; }
+		}
+		if !dup { out.push(h); }
+	}
 	out
+}
+fn grid_query(q const byte[:], k int) Hit[>..] {
+	var terms = query_terms(q);
+	rank(terms, k)
+}
+fn mask_wt(terms QTerm[>..]&, m uint) int {
+	var s = 0;
+	for ti in 0..min(terms.len, 64) { if (m >> (ti as uint)) & 1 == 1 { s += terms[ti].wt; } }
+	s
+}
+fn snippet(txt const byte[:], terms QTerm[>..]&, mc int, out byte[>..]&) int {
+	var st int[>..] = [];
+	var sc uint[>..] = [];
+	var lb byte[>..] = [];
+	var a = 0;
+	while a < txt.len {
+		var e = a;
+		while e < txt.len && txt[e] != '\n' { e += 1; }
+		lower_into(txt[a..min(e, a + 2048)], lb);
+		var m uint = 0;
+		for ti in 0..min(terms.len, 64) { if terms[ti].wt > 0 && has_word(lb[..], terms[ti].w[..]) { m = m | ((1 as uint) << (ti as uint)); } }
+		st.push(a);
+		sc.push(m);
+		a = e + 1;
+	}
+	st.push(a);
+	let nl = sc.len;
+	if nl == 0 { SN_B0 = 0; SN_B1 = 0; return 0; }
+	var b = 0;
+	var bs = -1;
+	for j in 0..nl {
+		var wm = sc[j];
+		if j > 0 { wm = wm | sc[j - 1]; }
+		if j + 1 < nl { wm = wm | sc[j + 1]; }
+		let v = mask_wt(terms, wm) * 4 + mask_wt(terms, sc[j]);
+		if v > bs { bs = v; b = j; }
+	}
+	SN_B0 = st[b];
+	SN_B1 = min(st[b + 1] - 1, txt.len);
+	var s = 0;
+	var e = nl - 1;
+	if txt.len > mc {
+		s = b;
+		e = b;
+		var used = st[b + 1] - st[b];
+		var grow = true;
+		while grow {
+			grow = false;
+			if e + 1 < nl && used + (st[e + 2] - st[e + 1]) <= mc { e += 1; used += st[e + 1] - st[e]; grow = true; }
+			if s > 0 && used + (st[s] - st[s - 1]) <= mc { s -= 1; used += st[s + 1] - st[s]; grow = true; }
+		}
+	}
+	out.append(" L");
+	format(out, s + 1);
+	out.push('-');
+	format(out, e + 1);
+	out.push('\n');
+	let hl = out.len;
+	let body = txt[st[s]..min(st[e + 1] - 1, txt.len)];
+	if body.len > mc { out.append(body[..mc]); out.append("..."); } else { out.append(body); }
+	hl
 }
 fn flush_index() {
 	var out byte[>..] = [];
@@ -437,7 +574,23 @@ fn ingest_doc(ns const byte[:], rel const byte[:], path const byte[:]) int {
 	added
 }
 fn is_indexable_file(name const byte[:]) bool {
-	ends_with(name, ".md") || ends_with(name, ".gold") || ends_with(name, ".he") || ends_with(name, ".amni") || ends_with(name, ".py") || ends_with(name, ".ts") || ends_with(name, ".rs") || ends_with(name, ".go") || ends_with(name, ".toml")
+	ends_with(name, ".md") || ends_with(name, ".gold") || ends_with(name, ".he") || ends_with(name, ".amni") || ends_with(name, ".py") || ends_with(name, ".ts") || ends_with(name, ".rs") || ends_with(name, ".go") || ends_with(name, ".toml") || ends_with(name, ".kt") || ends_with(name, ".kts") || ends_with(name, ".js") || ends_with(name, ".java") || ends_with(name, ".swift") || ends_with(name, ".c") || ends_with(name, ".h") || ends_with(name, ".sh") || ends_with(name, ".yml") || ends_with(name, ".yaml")
+}
+fn walk_index(dir const byte[:], rel const byte[:], depth int) int {
+	var names byte[>..] = [];
+	if !list_dir(dir, names) { return 0; }
+	var count = 0;
+	for nm in split(names[..], '\n') {
+		if nm.len == 0 || nm[0] == '.' || nm == "node_modules" || nm == "dist" || nm == "build" || nm == "target" || nm == "venv" || nm == "__pycache__" || nm == "vendor" { continue; }
+		let full = if dir == "." { str(nm) } else { str(dir, "/", nm) };
+		let r = if rel.len == 0 { str(nm) } else { str(rel, "/", nm) };
+		if is_dir(full) {
+			if depth < 5 { count += walk_index(full[..], r[..], depth + 1); }
+		} else if is_indexable_file(nm) {
+			count += ingest_doc("project", r[..], full[..]);
+		}
+	}
+	count
 }
 fn run_init(proj_dir const byte[:], kb_dir const byte[:]) {
 	ensure_kb_dirs(kb_dir);
@@ -448,27 +601,7 @@ fn run_init(proj_dir const byte[:], kb_dir const byte[:]) {
 		let gcl = str(hm, "/.claude/CLAUDE.md");
 		if file_exists(gcl) { count += ingest_doc("claude", "global", gcl[..]); }
 	}
-	var names byte[>..] = [];
-	if list_dir(proj_dir, names) {
-		for nm in split(names[..], '\n') {
-			if nm.len == 0 || nm[0] == '.' || nm == "node_modules" || nm == "dist" || nm == "build" || nm == "target" || nm == "venv" { continue; }
-			let full = if proj_dir == "." { str(nm) } else { str(proj_dir, "/", nm) };
-			if is_dir(full) {
-				var sub byte[>..] = [];
-				if list_dir(full, sub) {
-					for sn in split(sub[..], '\n') {
-						if sn.len == 0 || sn[0] == '.' { continue; }
-						let sfull = str(full, "/", sn);
-						if !is_dir(sfull) && is_indexable_file(sn) {
-							count += ingest_doc("project", str(nm, "/", sn)[..], sfull[..]);
-						}
-					}
-				}
-			} else if is_indexable_file(nm) {
-				count += ingest_doc("project", nm, full[..]);
-			}
-		}
-	}
+	count += walk_index(proj_dir, "", 1);
 	for p in 0..PAGES.len {
 		ensure_page_loaded(p);
 		write_file(str(ADIR, "/pages/", PAGES[p].fname), PDATA[p][..]);
@@ -559,6 +692,11 @@ fn run_install(bin_arg const byte[:], kb_dir const byte[:]) {
 		if wire_json_mcp(str(hm, "/.claude.json")[..], bin_path[..], kb_dir) {
 			write_stdout("  + wired Claude Code (~/.claude.json)\n");
 			wired += 1;
+		}
+		if is_dir(str(hm, "/.claude")) {
+			let hr = wire_claude_hooks(str(hm, "/.claude/settings.json")[..], bin_path[..], kb_dir);
+			if hr > 0 { write_stdout("  + Claude Code turn hooks (Stop saves turns, SessionStart on /clear restores state)\n"); }
+			else { write_stdout(str("  ! ~/.claude/settings.json already has a hooks block; add manually:\n      Stop: '", bin_path, "' hook stop --atex-dir '", kb_dir, "'\n      SessionStart (matcher clear|compact): '", bin_path, "' hook start --atex-dir '", kb_dir, "'\n")[..]); }
 		}
 		if is_dir(str(hm, "/.cursor")) && wire_json_mcp(str(hm, "/.cursor/mcp.json")[..], bin_path[..], kb_dir) {
 			write_stdout("  + wired Cursor (~/.cursor/mcp.json)\n");
@@ -674,6 +812,280 @@ fn format_stats_line() byte[>..] {
 	let util = if cap > 0 { (used as real / cap as real) * 100.0 } else { 0.0 };
 	str("entries=", ENTRIES.len, " pages=", PAGES.len, " used=", fmt(used as real / 1000000.0, 2), "MB capacity=", fmt(cap as real / 1000000.0, 2), "MB fill=", fmt(util, 1), "% engine=gold/helium-native")
 }
+fn proj_slug(cwd const byte[:]) byte[>..] {
+	var sl byte[>..] = [];
+	slugify_heading(cwd[max(0, cwd.len - 48)..], sl);
+	if sl.len == 0 { sl.append("root"); }
+	sl
+}
+fn clip(out byte[>..]&, s const byte[:], n int) {
+	if s.len > n { out.append(s[..n]); out.append(" [...]"); } else { out.append(s); }
+}
+fn hook_stop(d json::Doc&, root int) {
+	let tp, okt = json::as_string(d, json::member(d, root, "transcript_path"));
+	let cwd, _ = json::as_string(d, json::member(d, root, "cwd"));
+	if !okt { return; }
+	var raw byte[>..] = [];
+	if !read_file(tp, raw) { return; }
+	var prompt byte[>..] = [];
+	var reply byte[>..] = [];
+	var files byte[>..][>..] = [];
+	var ld = json::Doc {};
+	for ln in split(raw[..], '\n') {
+		let isu = find(ln, "\"type\":\"user\"") >= 0;
+		let isa = find(ln, "\"type\":\"assistant\"") >= 0;
+		if !isu && !isa { continue; }
+		let r, _ = json::parse(ln, ld);
+		if r < 0 { continue; }
+		let sc, oks = json::as_bool(ld, json::member(ld, r, "isSidechain"));
+		let mt, okm = json::as_bool(ld, json::member(ld, r, "isMeta"));
+		if (oks && sc) || (okm && mt) { continue; }
+		let ty, _ = json::as_string(ld, json::member(ld, r, "type"));
+		let ct = json::member(ld, json::member(ld, r, "message"), "content");
+		if ty == "user" {
+			var txt byte[>..] = [];
+			var tool_res = false;
+			let s, isstr = json::as_string(ld, ct);
+			if isstr { txt.append(s); } else {
+				for i in 0..json::count(ld, ct) {
+					let it = json::element(ld, ct, i);
+					let bt, _ = json::as_string(ld, json::member(ld, it, "type"));
+					if bt == "tool_result" { tool_res = true; }
+					else if bt == "text" { let tx, _ = json::as_string(ld, json::member(ld, it, "text")); if txt.len > 0 { txt.push('\n'); } txt.append(tx); }
+				}
+			}
+			let tt = trim(txt[..]);
+			if !tool_res && tt.len > 0 && !starts_with(tt, "<command") && !starts_with(tt, "<local-command") && !starts_with(tt, "Caveat:") && !starts_with(tt, "<system-reminder") {
+				prompt.clear();
+				prompt.append(tt);
+				reply.clear();
+			}
+		} else {
+			for i in 0..json::count(ld, ct) {
+				let it = json::element(ld, ct, i);
+				let bt, _ = json::as_string(ld, json::member(ld, it, "type"));
+				if bt == "text" {
+					let tx, _ = json::as_string(ld, json::member(ld, it, "text"));
+					if reply.len > 0 { reply.push('\n'); }
+					reply.append(tx);
+				} else if bt == "tool_use" {
+					let inp = json::member(ld, it, "input");
+					let fp1, ok1 = json::as_string(ld, json::member(ld, inp, "file_path"));
+					let fp2, ok2 = json::as_string(ld, json::member(ld, inp, "notebook_path"));
+					let fp = if ok1 { fp1 } else { fp2 };
+					let okf = ok1 || ok2;
+					if okf && fp.len > 0 {
+						var have = false;
+						for f in files { if f[..] == fp { have = true; } }
+						if !have { var fb byte[>..] = []; fb.append(fp); files.push(copy(fb)); }
+					}
+				}
+			}
+		}
+	}
+	if prompt.len == 0 { return; }
+	let ps = proj_slug(cwd);
+	let base = str("conv::", ps, "::");
+	let ck = str(base, "count");
+	var c = 0;
+	if contains(KMAP, ck[..]) { let v, okv = parse_int(trim(entry_text(get(KMAP, ck[..], 0)))); if okv { c = v; } }
+	let head = str("User: ", prompt, "\n");
+	if c > 0 {
+		let pk = str(base, "turn_", c);
+		if !(contains(KMAP, pk[..]) && starts_with(entry_text(get(KMAP, pk[..], 0)), head[..])) { c += 1; }
+	} else { c = 1; }
+	var rec byte[>..] = [];
+	rec.append(head[..]);
+	rec.append("Assistant: ");
+	rec.append(trim(reply[..]));
+	rec.push('\n');
+	if files.len > 0 {
+		rec.append("Files:");
+		for f in files { rec.push(' '); rec.append(f[..]); }
+		rec.push('\n');
+	}
+	save_kb_entry(str(base, "turn_", c)[..], rec[..]);
+	save_kb_entry(ck[..], str(c)[..]);
+	var stt byte[>..] = [];
+	stt.append("[atex] Restored working state for this project (");
+	format(stt, c);
+	stt.append(" saved turns). Older turns: atex_recall key ");
+	stt.append(base[..]);
+	stt.append("turn_<n>, or atex_search.\n");
+	if files.len > 0 {
+		stt.append("Files touched last session:");
+		for f in files[max(0, files.len - 20)..] { stt.push(' '); stt.append(f[..]); }
+		stt.push('\n');
+	}
+	for t in max(1, c - 2)..c + 1 {
+		let tk = str(base, "turn_", t);
+		if !contains(KMAP, tk[..]) { continue; }
+		stt.append("\n## Turn ");
+		format(stt, t);
+		stt.push('\n');
+		clip(stt, entry_text(get(KMAP, tk[..], 0)), if t == c { 2400 } else { 900 });
+		stt.push('\n');
+	}
+	save_kb_entry(str(base, "latest_state")[..], stt[..]);
+}
+fn hook_start(d json::Doc&, root int) {
+	let src, _ = json::as_string(d, json::member(d, root, "source"));
+	let cwd, _ = json::as_string(d, json::member(d, root, "cwd"));
+	if src == "startup" { return; }
+	let k = str("conv::", proj_slug(cwd), "::latest_state");
+	if !contains(KMAP, k[..]) { return; }
+	var out byte[>..] = [];
+	out.append("{\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":");
+	json::format_string(out, entry_text(get(KMAP, k[..], 0)));
+	out.append("}}\n");
+	write_stdout(out[..]);
+	flush_stdout();
+}
+fn run_hook(kind const byte[:]) {
+	var inp byte[>..] = [];
+	read_stdin(inp);
+	var d = json::Doc {};
+	let root, _ = json::parse(trim(inp[..]), d);
+	if root < 0 { return; }
+	if kind == "stop" { hook_stop(d, root); }
+	else if kind == "start" { hook_start(d, root); }
+}
+fn wire_claude_hooks(cfg_path const byte[:], bin_path const byte[:], kb_dir const byte[:]) int {
+	var raw byte[>..] = [];
+	let exists = read_file(cfg_path, raw);
+	if exists && find(raw[..], " hook stop") >= 0 { return 1; }
+	if exists && json_scan(raw[..], 0, "\"hooks\"") >= 0 { return 0; }
+	let stop_cmd = str("'", bin_path, "' hook stop --atex-dir '", kb_dir, "'");
+	let start_cmd = str("'", bin_path, "' hook start --atex-dir '", kb_dir, "'");
+	let blk = str("\"hooks\": {\"Stop\": [{\"hooks\": [{\"type\": \"command\", \"command\": ", json_str(stop_cmd[..]), "}]}], \"SessionStart\": [{\"matcher\": \"clear|compact\", \"hooks\": [{\"type\": \"command\", \"command\": ", json_str(start_cmd[..]), "}]}]}");
+	var out byte[>..] = [];
+	if !exists || trim(raw[..]).len == 0 {
+		out.append("{\n  ");
+		out.append(blk[..]);
+		out.append("\n}\n");
+	} else {
+		let lbr = rfind(raw[..], "}");
+		if lbr <= 0 { return 0; }
+		write_file(str(cfg_path, ".atex-backup"), raw[..]);
+		let pre = trim(raw[..lbr]);
+		out.append(raw[..lbr]);
+		if pre.len > 1 && pre[pre.len - 1] != '{' && pre[pre.len - 1] != ',' { out.push(','); }
+		out.append("\n  ");
+		out.append(blk[..]);
+		out.append("\n}\n");
+	}
+	if write_file_atomic(cfg_path, out[..]) { 2 } else { 0 }
+}
+fn search_text(q const byte[:], k int, mc int) byte[>..] {
+	var res byte[>..] = [];
+	var terms = query_terms(q);
+	let hits = rank(terms, k + 3);
+	var dbg byte[>..] = [];
+	if env("ATEX_DEBUG", dbg) && dbg.len > 0 {
+		for t in terms { write_stderr(str("[term] ", t.w[..], " wt=", t.wt, "\n")[..]); }
+		for h in hits { write_stderr(str("[hit] ", ENTRIES[h.id].key[..], " score=", h.score, "\n")[..]); }
+	}
+	var seen byte[>..][>..] = [];
+	var body byte[>..] = [];
+	var cnt = 0;
+	for h in hits {
+		if cnt >= k { break; }
+		body.clear();
+		let txt = entry_text(h.id);
+		snippet(txt, terms, mc, body);
+		var bl byte[>..] = [];
+		bl.append(trim(txt[SN_B0..SN_B1]));
+		var dup = false;
+		for p in seen { if p[..] == bl[..] { dup = true; } }
+		if dup { continue; }
+		seen.push(copy(bl));
+		if res.len > 0 { res.push('\n'); }
+		res.append("--- ");
+		res.append(ENTRIES[h.id].key[..]);
+		res.append(body[..]);
+		cnt += 1;
+	}
+	if cnt == 0 { res.append("(no confident match; try more specific keywords)"); }
+	res
+}
+fn run_bench(tsv const byte[:]) {
+	var raw byte[>..] = [];
+	if !read_file(tsv, raw) { write_stderr("[atex bench] cannot read question file\n"); return; }
+	var n = 0;
+	var a_hit = 0;
+	var a_sum = 0;
+	var f_hit = 0;
+	var f_sum = 0;
+	var w_sum = 0;
+	var rows byte[>..] = [];
+	for ln in split(raw[..], '\n') {
+		if ln.len == 0 || ln[0] == '#' { continue; }
+		let p1 = find(ln, "\t");
+		if p1 < 0 { continue; }
+		let rest = ln[p1 + 1..];
+		let p2 = find(rest, "\t");
+		if p2 < 0 { continue; }
+		let q = ln[..p1];
+		let ex = rest[..p2];
+		let fp = trim(rest[p2 + 1..]);
+		let res = search_text(q, DEF_K, DEF_MC);
+		let ah = find(res[..], ex) >= 0;
+		var fr byte[>..] = [];
+		read_file(fp, fr);
+		let fc = min(fr.len, 46080);
+		let at = find(fr[..], ex);
+		var wc = 0;
+		if at >= 0 {
+			var s = at;
+			var c = 0;
+			while s > 0 { if fr[s - 1] == '\n' { c += 1; if c > 20 { break; } } s -= 1; }
+			var e = at;
+			c = 0;
+			while e < fr.len { if fr[e] == '\n' { c += 1; if c > 20 { break; } } e += 1; }
+			wc = e - s;
+		}
+		n += 1;
+		if ah { a_hit += 1; }
+		if at >= 0 && at < 46080 { f_hit += 1; }
+		a_sum += res.len;
+		f_sum += fc;
+		w_sum += wc;
+		if rows.len > 0 { rows.push(','); }
+		rows.append("\n{\"query\":");
+		json::format_string(rows, q);
+		rows.append(",\"atex_chars\":");
+		format(rows, res.len);
+		rows.append(",\"atex_has_answer\":");
+		rows.append(if ah { "true" } else { "false" });
+		rows.append(",\"whole_file_chars\":");
+		format(rows, fc);
+		rows.append(",\"window41_chars\":");
+		format(rows, wc);
+		rows.append("}");
+	}
+	var out byte[>..] = [];
+	out.append("{\"engine\":\"atex 0.3.2\",\"k\":");
+	format(out, DEF_K);
+	out.append(",\"max_chars\":");
+	format(out, DEF_MC);
+	out.append(",\"questions\":");
+	format(out, n);
+	out.append(",\"atex_answer_hits\":");
+	format(out, a_hit);
+	out.append(",\"atex_total_chars\":");
+	format(out, a_sum);
+	out.append(",\"whole_file_answer_hits\":");
+	format(out, f_hit);
+	out.append(",\"whole_file_total_chars\":");
+	format(out, f_sum);
+	out.append(",\"window41_total_chars\":");
+	format(out, w_sum);
+	out.append(",\"rows\":[");
+	out.append(rows[..]);
+	out.append("\n]}\n");
+	write_stdout(out[..]);
+	flush_stdout();
+}
 fn main() {
 	let av = args();
 	var dir byte[>..] = [];
@@ -683,11 +1095,11 @@ fn main() {
 	while i < av.len {
 		let a = av[i];
 		if a == "--version" || a == "-v" {
-			write_stdout("atex 0.3.1 (gold/helium-native)\n");
+			write_stdout("atex 0.3.2 (gold/helium-native)\n");
 			flush_stdout();
 			return;
 		} else if a == "--help" || a == "-h" || a == "help" {
-			write_stdout("atex 0.3.1 (gold/helium-native)\nUsage:\n  atex [serve] [--atex-dir <dir>]     Run MCP stdio server\n  atex init [project_dir] [--atex-dir <dir>]  Index project docs & code into KB\n  atex install [--atex-dir <dir>]     Auto-wire Claude, Cursor, Windsurf, Gemini, Codex\n  atex stats [--atex-dir <dir>]       Print knowledge base statistics\n  atex --selftest                     Run end-to-end TexGrid & byte-page self-test\n");
+			write_stdout("atex 0.3.2 (gold/helium-native)\nUsage:\n  atex [serve] [--atex-dir <dir>]     Run MCP stdio server\n  atex init [project_dir] [--atex-dir <dir>]  Index project docs & code into KB\n  atex install [--atex-dir <dir>]     Auto-wire Claude, Cursor, Windsurf, Gemini, Codex\n  atex stats [--atex-dir <dir>]       Print knowledge base statistics\n  atex bench <questions.tsv>          Measure answer recall and output size vs whole-file reads\n  atex --selftest                     Run end-to-end TexGrid & byte-page self-test\n");
 			flush_stdout();
 			return;
 		} else if a == "--selftest" || a == "selftest" {
@@ -697,10 +1109,10 @@ fn main() {
 			dir.clear();
 			dir.append(av[i + 1]);
 			i += 2;
-		} else if cmd.len == 0 && (a == "serve" || a == "init" || a == "install" || a == "stats") {
+		} else if cmd.len == 0 && (a == "serve" || a == "init" || a == "install" || a == "stats" || a == "bench" || a == "hook") {
 			cmd.append(a);
 			i += 1;
-		} else if cmd == "init" && proj.len == 0 && a[0] != '-' {
+		} else if (cmd == "init" || cmd == "bench" || cmd == "hook") && proj.len == 0 && a[0] != '-' {
 			proj.append(a);
 			i += 1;
 		} else { i += 1; }
@@ -720,6 +1132,8 @@ fn main() {
 		write_stderr("[atex serve] ERROR: failed to load or create index.json\n");
 		return;
 	}
+	if cmd == "bench" { run_bench(proj[..]); return; }
+	if cmd == "hook" { run_hook(proj[..]); return; }
 	if cmd == "stats" {
 		let st = format_stats_line();
 		write_stdout(str(st, "\n")[..]);
@@ -744,14 +1158,14 @@ fn main() {
 			var out byte[>..] = [];
 			out.append("{\"jsonrpc\":\"2.0\",");
 			write_id(out, d, id_node);
-			out.append(",\"result\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"atex-gold\",\"version\":\"0.3.1\"}}}\n");
+			out.append(",\"result\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"atex-gold\",\"version\":\"0.3.2\"}}}\n");
 			write_stdout(out[..]);
 			flush_stdout();
 		} else if m == "tools/list" {
 			var out byte[>..] = [];
 			out.append("{\"jsonrpc\":\"2.0\",");
 			write_id(out, d, id_node);
-			out.append(",\"result\":{\"tools\":[{\"name\":\"atex_search\",\"description\":\"Search the local atex knowledge base (spatial tex-grid) for entries matching a query. Use this FIRST before reading full files, grepping, or asking the user to re-explain CLAUDE.md rules, repo structure, or build paths.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\",\"description\":\"Search keywords\"},\"k\":{\"type\":\"integer\",\"default\":3},\"max_chars\":{\"type\":\"integer\",\"default\":600}},\"required\":[\"query\"]}},{\"name\":\"atex_recall\",\"description\":\"Exact-key lookup in the atex knowledge base. Returns the stored text or null if the key does not exist.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"key\":{\"type\":\"string\"},\"max_chars\":{\"type\":\"integer\",\"default\":2400}},\"required\":[\"key\"]}},{\"name\":\"atex_remember\",\"description\":\"Persist a learned fact to the atex knowledge base under namespace manual::.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"key\":{\"type\":\"string\"},\"text\":{\"type\":\"string\"}},\"required\":[\"key\",\"text\"]}},{\"name\":\"atex_list_keys\",\"description\":\"List keys in the atex KB matching a prefix.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"prefix\":{\"type\":\"string\",\"default\":\"\"},\"max\":{\"type\":\"integer\",\"default\":50}},\"required\":[\"prefix\"]}},{\"name\":\"atex_stats\",\"description\":\"Get atex KB statistics and unbiased context tracker report path for the current conversation.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{}}}]}}\n");
+			out.append(",\"result\":{\"tools\":[{\"name\":\"atex_search\",\"description\":\"Keyword search over the local atex knowledge base. Returns each matching key with a line range and only the best-matching lines, or a one-line no-match notice. Try it before reading whole files.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\",\"description\":\"Search keywords\"},\"k\":{\"type\":\"integer\",\"default\":3},\"max_chars\":{\"type\":\"integer\",\"default\":600}},\"required\":[\"query\"]}},{\"name\":\"atex_recall\",\"description\":\"Exact-key lookup in the atex knowledge base. Returns the stored text or null if the key does not exist.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"key\":{\"type\":\"string\"},\"max_chars\":{\"type\":\"integer\",\"default\":2400}},\"required\":[\"key\"]}},{\"name\":\"atex_remember\",\"description\":\"Persist a learned fact to the atex knowledge base under namespace manual::.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"key\":{\"type\":\"string\"},\"text\":{\"type\":\"string\"}},\"required\":[\"key\",\"text\"]}},{\"name\":\"atex_list_keys\",\"description\":\"List keys in the atex KB matching a prefix.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"prefix\":{\"type\":\"string\",\"default\":\"\"},\"max\":{\"type\":\"integer\",\"default\":50}},\"required\":[\"prefix\"]}},{\"name\":\"atex_stats\",\"description\":\"Get atex KB statistics and unbiased context tracker report path for the current conversation.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{}}}]}}\n");
 			write_stdout(out[..]);
 			flush_stdout();
 		} else if m == "ping" {
@@ -779,25 +1193,10 @@ fn main() {
 				let q, _ = json::as_string(d, json::member(d, args_node, "query"));
 				let kv, okk = json::as_i64(d, json::member(d, args_node, "k"));
 				let mv, okm = json::as_i64(d, json::member(d, args_node, "max_chars"));
-				let k = if okk { kv } else { 3 };
-				let mc = if okm { mv } else { 600 };
-				let hits = grid_query(q, k);
-				if hits.len == 0 {
-					send_ok_text(d, id_node, "(no results)", false);
-				} else {
-					var res byte[>..] = [];
-					res.append("Reference docs (retrieved from knowledge base):");
-					for h in hits {
-						res.append("\n--- ");
-						res.append(ENTRIES[h.id].key[..]);
-						res.append(" (score=");
-						format(res, h.score);
-						res.append(")\n");
-						let txt = entry_text(h.id);
-						if txt.len > mc { res.append(txt[..mc]); res.append("..."); } else { res.append(txt); }
-					}
-					send_ok_text(d, id_node, res[..], false);
-				}
+				let k = if okk { kv } else { DEF_K };
+				let mc = if okm { mv } else { DEF_MC };
+				let res = search_text(q, k, mc);
+				send_ok_text(d, id_node, res[..], false);
 			} else if tname == "atex_recall" {
 				let key, _ = json::as_string(d, json::member(d, args_node, "key"));
 				let mv, okm = json::as_i64(d, json::member(d, args_node, "max_chars"));

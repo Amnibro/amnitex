@@ -1,4 +1,4 @@
-# atex (amni-tex) — Native Gold/Helium Edition (v0.3.0)
+# atex (amni-tex) — Native Gold/Helium Edition (v0.3.2)
 
 **A lossless local byte-page memory layer for MCP-capable AI coding assistants. It also stores every conversation turn so earlier facts can be recalled exactly.**
 Written in [Gold](https://github.com/Amnibro/gold) and compiled to native [Helium](https://github.com/Amnibro/helium). Local. No embeddings. No cloud. MIT-licensed. **1.66 µs** keyword lookup through a spatial `TexGrid`. Building the grid plus running 3 searches is `17.5×` faster than the earlier Python version, and the process uses `5.2 MB` RSS.
@@ -71,6 +71,32 @@ Reproducible via `./bench_conv_lut_bin` (`bench_conv_lut.gold`, 200 simulated tu
 - **Single-query `TexGrid` lookup:** `1.66 µs`
 - **Exact fact recall at turn 200:** `20/20` measured from the atex store (keyword-overlap queries). The `2/20` for lossy summaries is modeled, not measured
 - Interactive charts & full writeup: **[amni-scient.com/amnitex-lut.html](https://amni-scient.com/amnitex-lut.html)**
+
+### Measured: lookup benchmark (v0.3.2)
+
+`atex bench bench/lookup_questions.tsv` runs 22 lookups whose answer strings are known. For each one it checks whether the answer text shows up in `atex_search`'s default output (k=3, max_chars=600) and counts the chars returned. The comparison is reading the whole file that holds the answer (capped at 46,080 chars, the size of one `view_file` page) or a 41-line window around it. Results are in [`lookup_bench_results.json`](lookup_bench_results.json).
+
+| Method | Answer in output | Chars returned (22 lookups) |
+|---|---:|---:|
+| atex v0.3.1 search, repo KB (114 entries) | 5/22 | 43,582 |
+| **atex v0.3.2 search, repo KB** | **15/22** | **35,067** |
+| atex v0.3.1 search, author's working KB (~1,000 entries) | 3/22 | 43,673 |
+| **atex v0.3.2 search, author's working KB** | **14/22** | **35,529** |
+| Read the whole file holding the answer | 22/22 | 604,655 |
+| Read ±20 lines around the answer (requires already knowing where it is) | 22/22 | 48,010 |
+
+Caveats: the author wrote these questions and tuned the ranker against them, so treat them as a smoke test, not a held-out evaluation. "Answer in output" means the text appears in the output; it does not measure whether a model finished a task. When atex misses (7 of 22 here), the model still has to fall back to grep/read, so those chars are extra cost.
+
+What changed in v0.3.2: IDF term weighting (common words like "build" no longer dominate), each entry counted once per term, digits and plurals indexed, results filtered by confidence, snippets with line ranges instead of file heads, and `atex init` now walks 5 directory levels.
+
+### Claude Code turn hooks (v0.3.2)
+
+`atex install` (or the Claude Code plugin's `hooks/hooks.json`) adds two hooks:
+
+- **Stop** → `atex hook stop` saves the turn's user prompt, final assistant text and touched files as `conv::<project>::turn_<N>`, and refreshes `conv::<project>::latest_state`.
+- **SessionStart** (only on `/clear` or compaction) → `atex hook start` injects `latest_state`: the last three turns, with the newest capped at 2,400 chars and the two before it at 900. In a test on real transcripts it was 4,391 bytes (~1.1K tokens). Normal startup injects nothing.
+
+This lets you `/clear` whenever the context gets heavy and carry on with recent state, with older turns retrievable through `atex_recall`/`atex_search`. The saving comes from clearing more often. How much it saves in practice has not been measured on live API usage yet.
 
 ### Scale-validated retrieval (v0.2.0 spatial tex-grid)
 
