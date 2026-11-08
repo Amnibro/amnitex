@@ -1,4 +1,4 @@
-# atex (amni-tex) — Native Gold/Helium Edition (v0.3.3)
+# atex (amni-tex) — Native Gold/Helium Edition (v0.3.4)
 
 **A lossless local byte-page memory layer for MCP-capable AI coding assistants. It also stores every conversation turn so earlier facts can be recalled exactly.**
 Written in [Gold](https://github.com/Amnibro/gold) and compiled to native [Helium](https://github.com/Amnibro/helium). Local. No embeddings. No cloud. MIT-licensed. Exact-match nonce lookup through an RGBA texture LUT (`index.tex`): a 15 MB knowledge base loads in 22 ms.
@@ -80,17 +80,36 @@ Every unique word, symbol and compound identifier (`snake_case`, `dotted.names`,
 |---|---:|---:|---:|---:|---:|
 | 15.3 MB, 1,225 entries | 80,420 | 373,558 | 2.9 MB (4096×111 RGBA) | 22 ms | 133 ms |
 
+### Lossless retrieval (v0.3.4)
+
+Every stored byte stays reachable from a search result:
+
+- **Complete enumeration.** `atex_search` ranks every entry containing a query nonce. Confident matches show as snippets; a footer lists every remaining matching key and the `page=N` that returns them. Nothing is dropped by a threshold.
+- **Every match location.** Each snippet shows its line range plus `also: L120 L340 (+n)`, the other lines in that entry that match.
+- **Line-range recall.** `atex_recall(key, lines="a-b")` returns exactly those lines. Truncated recalls end with the precise remaining range (`rest: lines="58-212"`).
+- **Exact mode.** `atex_search(query, exact=true)` scans all stored text for the literal string (case-exact matches first, then case-insensitive) and returns `key:Ln: line` rows, windowed around the match, paged by whole rows.
+- **Phrase nonces.** Adjacent query words are joined (`key score` → `key_score`, `keyscore`) and used when that compound exists in the vocabulary.
+
 ### Lookup benchmark
 
-`atex bench <questions.tsv>` runs lookups with known answers. It records whether the answer text appears in `atex_search`'s default output (k=3, max_chars=600) and how many chars were returned, and compares that with reading the whole file or a 41-line window around the answer. Results: [`lookup_bench_results.json`](lookup_bench_results.json), [`lookup_heldout_results.json`](lookup_heldout_results.json).
+`atex bench <questions.tsv>` runs lookups with known answers against `atex_search`'s default output (k=3, max_chars=600). Per question it records:
 
-| Set | atex v0.3.1 | atex v0.3.3 | atex v0.3.3 chars | Whole-file chars |
-|---|---:|---:|---:|---:|
-| Tuning set (22), repo KB | 5/22 | 16/22 | 31,876 | 624,554 |
-| Tuning set (22), 15 MB KB | 3/22 | 16/22 | 35,519 | 624,554 |
-| Held-out set (10), repo KB | – | 4/10 | 16,744 | 199,732 |
+- **answer**: the answer text appears in the output;
+- **located**: the answer text appears, or a returned entry's shown line range or `also:` list contains the line holding the answer;
+- **exact**: `exact=true` page 1 for the answer string contains it.
 
-v0.3.3 ranking: IDF weights over exact nonces, a passage re-rank (query terms found within ±1 line), a bonus for definition lines, plural/`-ies`/`-ed`/`-er` stemming, a code-vocabulary map (directory→dir, environment→env, python→py …), confidence filtering, line-range snippets, and generated `.amni` files skipped when their `.gold` source is present.
+It compares chars returned with reading the whole file or a 41-line window around the answer. Results: [`lookup_bench_results.json`](lookup_bench_results.json), [`lookup_heldout_results.json`](lookup_heldout_results.json).
+
+| Set | v0.3.1 answer | v0.3.4 answer | v0.3.4 located | v0.3.4 exact | v0.3.4 chars | Whole-file chars |
+|---|---:|---:|---:|---:|---:|---:|
+| Tuning set (22), repo KB | 5/22 | 16/22 | 22/22 | 22/22 | 40,048 | 628,946 |
+| Tuning set (22), 15 MB KB | 3/22 | 15/22 | 16/22 | 22/22 | 43,931 | 628,946 |
+| Held-out set (10), repo KB | – | 4/10 | 8/10 | 10/10 | 20,545 | 199,732 |
+| Held-out set (10), 15 MB KB | – | 5/10 | 7/10 | 8/10 | 21,729 | 199,732 |
+
+The 15 MB KB is a snapshot indexed before two held-out answers were written, so those strings are not stored there; exact mode finds every answer that is stored.
+
+Ranking: IDF weights over exact nonces, a passage re-rank (query terms found within ±1 line), a bonus for definition lines, plural/`-ies`/`-ed`/`-er` stemming, a code-vocabulary map (directory→dir, environment→env, python→py …), phrase nonces, confidence ordering, line-range snippets, and generated `.amni` files skipped when their `.gold` source is present.
 
 ### Claude Code turn hooks
 
@@ -172,8 +191,8 @@ The 0.5B model retrieved the validation cookie out of the seeded `atex` knowledg
 
 | Tool                          | Use when |
 |-------------------------------|-----|
-| `atex_search(query, k)`       | The assistant should look something up before asking you to re-explain it |
-| `atex_recall(key)`            | Exact path lookup, e.g. `project::src/auth.ts` |
+| `atex_search(query, k, max_chars, page, exact)` | Look something up before asking you to re-explain it; `page` walks the full match list, `exact=true` scans raw text |
+| `atex_recall(key, max_chars, lines)` | Exact key lookup, e.g. `project::src/auth.ts`; `lines="a-b"` returns a line range |
 | `atex_remember(key, text)`    | You explicitly tell it "remember that X" |
 | `atex_list_keys(prefix, max)` | Discover what is known about an area |
 | `atex_stats()`                | Inspect KB size / fill |

@@ -9,7 +9,7 @@ import json;
 import dictionary;
 struct Page { fname byte[..64], idx int, used int }
 struct Entry { key byte[>..], page int, off int, len int, src_bytes int }
-struct Hit { id int, score int }
+struct Hit { id int, score int, conf int }
 var ADIR byte[>..];
 var PAGES Page[>..];
 var PDATA byte[>..][>..];
@@ -241,6 +241,13 @@ struct QTerm { w byte[..128], wt int, cell int, syn int }
 var SN_B0 = 0;
 var SN_B1 = 0;
 var SN_WIN = 0;
+var SN_S = 0;
+var SN_E = 0;
+var SN_ALSO int[>..];
+var RES_ID int[>..];
+var RES_S int[>..];
+var RES_E int[>..];
+var RES_AL int[>..];
 fn lower_into(s const byte[:], out byte[>..]&) {
 	out.clear();
 	for c in s { out.push(lower(c)); }
@@ -301,6 +308,8 @@ fn query_terms(q const byte[:]) QTerm[>..] {
 	var i = 0;
 	var w byte[..128] = [];
 	var sub byte[..128] = [];
+	var prev byte[>..] = [];
+	var pr byte[>..] = [];
 	while i < q.len {
 		if is_tok_lead(q[i]) {
 			let a = i;
@@ -314,6 +323,19 @@ fn query_terms(q const byte[:]) QTerm[>..] {
 				w.push(lc);
 			}
 			add_qterm(terms, w[..]);
+			if prev.len > 0 && !is_stop(w[..]) {
+				pr.clear();
+				pr.append(prev[..]);
+				pr.push('_');
+				pr.append(w[..]);
+				if nonce_find(pr[..]) >= 0 { add_term_raw(terms, pr[..], 0); }
+				pr.clear();
+				pr.append(prev[..]);
+				pr.append(w[..]);
+				if nonce_find(pr[..]) >= 0 { add_term_raw(terms, pr[..], 0); }
+			}
+			prev.clear();
+			if !is_stop(w[..]) { prev.append(w[..]); }
 			if has_sep {
 				sub.clear();
 				for m in 0..w.len {
@@ -326,7 +348,7 @@ fn query_terms(q const byte[:]) QTerm[>..] {
 	}
 	terms
 }
-fn rank(terms QTerm[>..]&, k int) Hit[>..] {
+fn rank(terms QTerm[>..]&) Hit[>..] {
 	if !GBUILT { build_grid(); }
 	var scores = dictionary<int, int> {};
 	var ids int[>..] = [];
@@ -349,16 +371,16 @@ fn rank(terms QTerm[>..]&, k int) Hit[>..] {
 	var hits Hit[>..] = [];
 	var kl byte[>..] = [];
 	each(scores) { id, sc =>
-		if sc * 3 >= total {
-			var s = sc;
-			lower_into(ENTRIES[id].key[..], kl);
-			for ti in 0..terms.len { if terms[ti].wt > 0 && has_word(kl[..], stem_y(terms[ti].w[..])) { s += terms[ti].wt; } }
-			if starts_with(ENTRIES[id].key[..], "manual::") { s += 2; }
-			hits.push(Hit { id: id, score: s });
-		}
+		var s = sc;
+		lower_into(ENTRIES[id].key[..], kl);
+		for ti in 0..terms.len { if terms[ti].wt > 0 && has_word(kl[..], stem_y(terms[ti].w[..])) { s += terms[ti].wt; } }
+		if starts_with(ENTRIES[id].key[..], "manual::") { s += 2; }
+		hits.push(Hit { id: id, score: s, conf: if sc * 3 >= total { 1 } else { 0 } });
 	};
-	sort(hits[..]) { a, b => a.score > b.score || (a.score == b.score && (ENTRIES[a.id].len < ENTRIES[b.id].len || (ENTRIES[a.id].len == ENTRIES[b.id].len && a.id < b.id))) };
-	let nre = min(hits.len, 40);
+	sort(hits[..]) { a, b => a.conf > b.conf || (a.conf == b.conf && (a.score > b.score || (a.score == b.score && (ENTRIES[a.id].len < ENTRIES[b.id].len || (ENTRIES[a.id].len == ENTRIES[b.id].len && a.id < b.id))))) };
+	var nc = 0;
+	for h in hits { if h.conf == 1 { nc += 1; } }
+	let nre = min(nc, 40);
 	var scr byte[>..] = [];
 	for j in 0..nre {
 		scr.clear();
@@ -366,16 +388,20 @@ fn rank(terms QTerm[>..]&, k int) Hit[>..] {
 		hits[j].score = SN_WIN * 2 + hits[j].score;
 	}
 	sort(hits[..nre]) { a, b => a.score > b.score || (a.score == b.score && (ENTRIES[a.id].len < ENTRIES[b.id].len || (ENTRIES[a.id].len == ENTRIES[b.id].len && a.id < b.id))) };
+	if nre > 0 {
+		let best = hits[0].score;
+		for j in 0..nre { if hits[j].score * 2 < best { hits[j].conf = 0; } }
+		sort(hits[..nc]) { a, b => a.conf > b.conf || (a.conf == b.conf && (a.score > b.score || (a.score == b.score && a.id < b.id))) };
+	}
 	var out Hit[>..] = [];
-	if hits.len == 0 { return out; }
-	let best = hits[0].score;
 	for h in hits {
-		if out.len >= k || h.score * 2 < best { break; }
 		let hk = ENTRIES[h.id].key[..];
 		var dup = false;
-		for o in out {
-			let ek = ENTRIES[o.id].key[..];
-			if (hk.len > ek.len && starts_with(hk, ek) && hk[ek.len] == ':') || (ek.len > hk.len && starts_with(ek, hk) && ek[hk.len] == ':') { dup = true; }
+		if out.len < 200 {
+			for o in out {
+				let ek = ENTRIES[o.id].key[..];
+				if (hk.len > ek.len && starts_with(hk, ek) && hk[ek.len] == ':') || (ek.len > hk.len && starts_with(ek, hk) && ek[hk.len] == ':') { dup = true; }
+			}
 		}
 		if !dup { out.push(h); }
 	}
@@ -383,7 +409,10 @@ fn rank(terms QTerm[>..]&, k int) Hit[>..] {
 }
 fn grid_query(q const byte[:], k int) Hit[>..] {
 	var terms = query_terms(q);
-	rank(terms, k)
+	let all = rank(terms);
+	var out Hit[>..] = [];
+	for h in all { if out.len >= k || h.conf == 0 { break; } out.push(h); }
+	out
 }
 fn mask_wt(terms QTerm[>..]&, m uint) int {
 	var s = 0;
@@ -395,6 +424,7 @@ fn snippet(txt const byte[:], terms QTerm[>..]&, mc int, out byte[>..]&) int {
 	var sc uint[>..] = [];
 	var df bool[>..] = [];
 	var lb byte[>..] = [];
+	SN_ALSO.clear();
 	var a = 0;
 	while a < txt.len {
 		var e = a;
@@ -410,7 +440,7 @@ fn snippet(txt const byte[:], terms QTerm[>..]&, mc int, out byte[>..]&) int {
 	}
 	st.push(a);
 	let nl = sc.len;
-	if nl == 0 { SN_B0 = 0; SN_B1 = 0; return 0; }
+	if nl == 0 { SN_B0 = 0; SN_B1 = 0; SN_S = 1; SN_E = 1; return 0; }
 	var b = 0;
 	var bs = -1;
 	for j in 0..nl {
@@ -437,6 +467,13 @@ fn snippet(txt const byte[:], terms QTerm[>..]&, mc int, out byte[>..]&) int {
 			if s > 0 && used + (st[s] - st[s - 1]) <= mc { s -= 1; used += st[s + 1] - st[s]; grow = true; }
 		}
 	}
+	SN_S = s + 1;
+	SN_E = e + 1;
+	var cand int[>..] = [];
+	for j in 0..nl { if (j < s || j > e) && sc[j] != 0 { cand.push(j); } }
+	sort(cand[..]) { x, y => mask_wt(terms, sc[x]) > mask_wt(terms, sc[y]) || (mask_wt(terms, sc[x]) == mask_wt(terms, sc[y]) && x < y) };
+	for j in 0..min(cand.len, 8) { SN_ALSO.push(cand[j] + 1); }
+	sort(SN_ALSO[..]) { x, y => x < y };
 	out.append(" L");
 	format(out, s + 1);
 	out.push('-');
@@ -445,6 +482,11 @@ fn snippet(txt const byte[:], terms QTerm[>..]&, mc int, out byte[>..]&) int {
 	let hl = out.len;
 	let body = txt[st[s]..min(st[e + 1] - 1, txt.len)];
 	if body.len > mc { out.append(body[..mc]); out.append("..."); } else { out.append(body); }
+	if SN_ALSO.len > 0 {
+		out.append("\nalso:");
+		for x in SN_ALSO { out.append(" L"); format(out, x); }
+		if cand.len > 8 { out.append(" (+"); format(out, cand.len - 8); out.append(")"); }
+	}
 	hl
 }
 fn flush_index() {
@@ -1092,20 +1134,41 @@ fn wire_claude_hooks(cfg_path const byte[:], bin_path const byte[:], kb_dir cons
 	}
 	if write_file_atomic(cfg_path, out[..]) { 2 } else { 0 }
 }
-fn search_text(q const byte[:], k int, mc int) byte[>..] {
+fn is_section(id int) bool {
+	let k = ENTRIES[id].key[..];
+	let p = rfind(k, "::");
+	let f = find(k, "::");
+	p > f && f >= 0 && contains(KMAP, k[..p])
+}
+fn line_of(txt const byte[:], at int) int {
+	var n = 1;
+	for i in 0..min(at, txt.len) { if txt[i] == '\n' { n += 1; } }
+	n
+}
+fn search_text(q const byte[:], k int, mc int, page int) byte[>..] {
 	var res byte[>..] = [];
 	var terms = query_terms(q);
-	let hits = rank(terms, k + 3);
+	let hits = rank(terms);
+	RES_ID.clear();
+	RES_S.clear();
+	RES_E.clear();
+	RES_AL.clear();
 	var dbg byte[>..] = [];
 	if env("ATEX_DEBUG", dbg) && dbg.len > 0 {
 		for t in terms { write_stderr(str("[term] ", t.w[..], " wt=", t.wt, "\n")[..]); }
-		for h in hits { write_stderr(str("[hit] ", ENTRIES[h.id].key[..], " score=", h.score, "\n")[..]); }
+		for h in hits[..min(hits.len, 8)] { write_stderr(str("[hit] ", ENTRIES[h.id].key[..], " score=", h.score, " conf=", h.conf, "\n")[..]); }
 	}
+	if hits.len == 0 { res.append("(no stored entry contains these terms; exact=true scans raw text)"); return res; }
+	let pg = max(1, page);
+	var j = (pg - 1) * k;
 	var seen byte[>..][>..] = [];
+	var dups int[>..] = [];
 	var body byte[>..] = [];
 	var cnt = 0;
-	for h in hits {
-		if cnt >= k { break; }
+	while j < hits.len && cnt < k {
+		let h = hits[j];
+		if pg == 1 && h.conf == 0 { break; }
+		j += 1;
 		body.clear();
 		let txt = entry_text(h.id);
 		snippet(txt, terms, mc, body);
@@ -1113,16 +1176,109 @@ fn search_text(q const byte[:], k int, mc int) byte[>..] {
 		bl.append(trim(txt[SN_B0..SN_B1]));
 		var dup = false;
 		for p in seen { if p[..] == bl[..] { dup = true; } }
-		if dup { continue; }
+		if dup { dups.push(h.id); continue; }
 		seen.push(copy(bl));
+		RES_ID.push(h.id);
+		RES_S.push(SN_S);
+		RES_E.push(SN_E);
+		for x in SN_ALSO { RES_AL.push(h.id); RES_AL.push(x); }
 		if res.len > 0 { res.push('\n'); }
 		res.append("--- ");
 		res.append(ENTRIES[h.id].key[..]);
 		res.append(body[..]);
 		cnt += 1;
 	}
-	if cnt == 0 { res.append("(no confident match; try more specific keywords)"); }
+	let rest = hits.len - j;
+	if rest > 0 || dups.len > 0 {
+		if res.len > 0 { res.push('\n'); }
+		res.append("[");
+		if dups.len > 0 {
+			res.append("same lines also in:");
+			for d in dups { res.push(' '); res.append(ENTRIES[d].key[..]); }
+			if rest > 0 { res.append("; "); }
+		}
+		if rest > 0 {
+			res.append("+");
+			format(res, rest);
+			res.append(if cnt == 0 && pg == 1 { " weak matches: " } else { " more: " });
+			var shown = 0;
+			var m = j;
+			while m < hits.len && shown < 8 { if shown > 0 { res.append(" · "); } res.append(ENTRIES[hits[m].id].key[..]); shown += 1; m += 1; }
+			if rest > shown { res.append(" …"); }
+			res.append("; page=");
+			format(res, if cnt == 0 && pg == 1 { 2 } else { pg + 1 });
+		}
+		res.append("]");
+	}
 	res
+}
+fn exact_text(q const byte[:], k int, mc int, page int) byte[>..] {
+	var res byte[>..] = [];
+	var lq byte[>..] = [];
+	lower_into(q, lq);
+	if lq.len == 0 { res.append("(empty query)"); return res; }
+	var lb byte[>..] = [];
+	var total = 0;
+	var ents = 0;
+	let rpp = max(1, (k * mc) / 160);
+	let skip = (max(1, page) - 1) * rpp;
+	var hit_ent bool[>..] = [];
+	for id in 0..ENTRIES.len { hit_ent.push(false); }
+	for pass in 0..2 {
+		for id in 0..ENTRIES.len {
+			if is_section(id) { continue; }
+			let txt = entry_text(id);
+			var a = 0;
+			var ln = 1;
+			while a < txt.len {
+				var e = a;
+				while e < txt.len && txt[e] != '\n' { e += 1; }
+				let cs = find(txt[a..e], q);
+				var mp = -1;
+				if pass == 0 { mp = cs; } else if cs < 0 { lower_into(txt[a..e], lb); mp = find(lb[..], lq[..]); }
+				if mp >= 0 {
+					if total >= skip && total < skip + rpp {
+						res.append(ENTRIES[id].key[..]);
+						res.append(":L");
+						format(res, ln);
+						res.append(": ");
+						let w0 = if e - a > 240 { max(0, min(mp - 80, e - a - 240)) } else { 0 };
+						let w1 = min(e - a, w0 + 240);
+						if w0 > 0 { res.append("..."); }
+						res.append(trim(txt[a + w0..a + w1]));
+						if w1 < e - a { res.append("..."); }
+						res.push('\n');
+					}
+					total += 1;
+					if !hit_ent[id] { hit_ent[id] = true; ents += 1; }
+				}
+				a = e + 1;
+				ln += 1;
+			}
+		}
+	}
+	if total == 0 { res.append("(no stored text contains this string)"); return res; }
+	res.append("[");
+	format(res, total);
+	res.append(" matching lines in ");
+	format(res, ents);
+	res.append(" entries");
+	if total > skip + rpp { res.append("; page="); format(res, max(1, page) + 1); }
+	res.append("]");
+	res
+}
+fn slice_lines(txt const byte[:], spec const byte[:], out byte[>..]&) bool {
+	let dash = find(spec, "-");
+	let a, oka = parse_int(trim(if dash >= 0 { spec[..dash] } else { spec }));
+	let b, okb = if dash >= 0 { parse_int(trim(spec[dash + 1..])) } else { parse_int(trim(spec)) };
+	if !oka || !okb || a < 1 || b < a { return false; }
+	var ln = 1;
+	var p = 0;
+	while p < txt.len && ln < a { if txt[p] == '\n' { ln += 1; } p += 1; }
+	var e = p;
+	while e < txt.len && ln <= b { if txt[e] == '\n' { ln += 1; if ln > b { break; } } e += 1; }
+	out.append(txt[p..e]);
+	true
 }
 fn run_bench(tsv const byte[:]) {
 	var raw byte[>..] = [];
@@ -1133,6 +1289,8 @@ fn run_bench(tsv const byte[:]) {
 	var f_hit = 0;
 	var f_sum = 0;
 	var w_sum = 0;
+	var l_hit = 0;
+	var x_hit = 0;
 	var rows byte[>..] = [];
 	for ln in split(raw[..], '\n') {
 		if ln.len == 0 || ln[0] == '#' { continue; }
@@ -1144,12 +1302,31 @@ fn run_bench(tsv const byte[:]) {
 		let q = ln[..p1];
 		let ex = rest[..p2];
 		let fp = trim(rest[p2 + 1..]);
-		let res = search_text(q, DEF_K, DEF_MC);
+		let res = search_text(q, DEF_K, DEF_MC, 1);
 		let ah = find(res[..], ex) >= 0;
 		var fr byte[>..] = [];
 		read_file(fp, fr);
 		let fc = min(fr.len, 46080);
 		let at = find(fr[..], ex);
+		var lo = ah;
+		for i in 0..RES_ID.len {
+			if lo { break; }
+			let et = entry_text(RES_ID[i]);
+			var p = 0;
+			while !lo && p < et.len {
+				let f = find(et[p..], ex);
+				if f < 0 { break; }
+				let al = line_of(et, p + f);
+				if al >= RES_S[i] && al <= RES_E[i] { lo = true; }
+				var j = 0;
+				while j + 1 < RES_AL.len { if RES_AL[j] == RES_ID[i] && RES_AL[j + 1] == al { lo = true; } j += 2; }
+				p = p + f + 1;
+			}
+		}
+		if lo { l_hit += 1; }
+		let xr = exact_text(ex, DEF_K, DEF_MC, 1);
+		let xh = find(xr[..], ex) >= 0;
+		if xh { x_hit += 1; }
 		var wc = 0;
 		if at >= 0 {
 			var s = at;
@@ -1173,6 +1350,10 @@ fn run_bench(tsv const byte[:]) {
 		format(rows, res.len);
 		rows.append(",\"atex_has_answer\":");
 		rows.append(if ah { "true" } else { "false" });
+		rows.append(",\"located\":");
+		rows.append(if lo { "true" } else { "false" });
+		rows.append(",\"exact_has_answer\":");
+		rows.append(if xh { "true" } else { "false" });
 		rows.append(",\"whole_file_chars\":");
 		format(rows, fc);
 		rows.append(",\"window41_chars\":");
@@ -1180,7 +1361,7 @@ fn run_bench(tsv const byte[:]) {
 		rows.append("}");
 	}
 	var out byte[>..] = [];
-	out.append("{\"engine\":\"atex 0.3.3\",\"k\":");
+	out.append("{\"engine\":\"atex 0.3.4\",\"k\":");
 	format(out, DEF_K);
 	out.append(",\"max_chars\":");
 	format(out, DEF_MC);
@@ -1188,6 +1369,10 @@ fn run_bench(tsv const byte[:]) {
 	format(out, n);
 	out.append(",\"atex_answer_hits\":");
 	format(out, a_hit);
+	out.append(",\"atex_located\":");
+	format(out, l_hit);
+	out.append(",\"exact_answer_hits\":");
+	format(out, x_hit);
 	out.append(",\"atex_total_chars\":");
 	format(out, a_sum);
 	out.append(",\"whole_file_answer_hits\":");
@@ -1211,11 +1396,11 @@ fn main() {
 	while i < av.len {
 		let a = av[i];
 		if a == "--version" || a == "-v" {
-			write_stdout("atex 0.3.3 (gold/helium-native)\n");
+			write_stdout("atex 0.3.4 (gold/helium-native)\n");
 			flush_stdout();
 			return;
 		} else if a == "--help" || a == "-h" || a == "help" {
-			write_stdout("atex 0.3.3 (gold/helium-native)\nUsage:\n  atex [serve] [--atex-dir <dir>]     Run MCP stdio server\n  atex init [project_dir] [--atex-dir <dir>]  Index project docs & code into KB\n  atex install [--atex-dir <dir>]     Auto-wire Claude, Cursor, Windsurf, Gemini, Codex\n  atex stats [--atex-dir <dir>]       Print knowledge base statistics\n  atex bench <questions.tsv>          Measure answer recall and output size vs whole-file reads\n  atex --selftest                     Run end-to-end TexGrid & byte-page self-test\n");
+			write_stdout("atex 0.3.4 (gold/helium-native)\nUsage:\n  atex [serve] [--atex-dir <dir>]     Run MCP stdio server\n  atex init [project_dir] [--atex-dir <dir>]  Index project docs & code into KB\n  atex install [--atex-dir <dir>]     Auto-wire Claude, Cursor, Windsurf, Gemini, Codex\n  atex stats [--atex-dir <dir>]       Print knowledge base statistics\n  atex bench <questions.tsv>          Measure answer recall and output size vs whole-file reads\n  atex --selftest                     Run end-to-end TexGrid & byte-page self-test\n");
 			flush_stdout();
 			return;
 		} else if a == "--selftest" || a == "selftest" {
@@ -1274,14 +1459,14 @@ fn main() {
 			var out byte[>..] = [];
 			out.append("{\"jsonrpc\":\"2.0\",");
 			write_id(out, d, id_node);
-			out.append(",\"result\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"atex-gold\",\"version\":\"0.3.3\"}}}\n");
+			out.append(",\"result\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"atex-gold\",\"version\":\"0.3.4\"}}}\n");
 			write_stdout(out[..]);
 			flush_stdout();
 		} else if m == "tools/list" {
 			var out byte[>..] = [];
 			out.append("{\"jsonrpc\":\"2.0\",");
 			write_id(out, d, id_node);
-			out.append(",\"result\":{\"tools\":[{\"name\":\"atex_search\",\"description\":\"Keyword search over the local atex knowledge base. Returns each matching key with a line range and only the best-matching lines, or a one-line no-match notice. Try it before reading whole files.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\",\"description\":\"Search keywords\"},\"k\":{\"type\":\"integer\",\"default\":3},\"max_chars\":{\"type\":\"integer\",\"default\":600}},\"required\":[\"query\"]}},{\"name\":\"atex_recall\",\"description\":\"Exact-key lookup in the atex knowledge base. Returns the stored text or null if the key does not exist.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"key\":{\"type\":\"string\"},\"max_chars\":{\"type\":\"integer\",\"default\":2400}},\"required\":[\"key\"]}},{\"name\":\"atex_remember\",\"description\":\"Persist a learned fact to the atex knowledge base under namespace manual::.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"key\":{\"type\":\"string\"},\"text\":{\"type\":\"string\"}},\"required\":[\"key\",\"text\"]}},{\"name\":\"atex_list_keys\",\"description\":\"List keys in the atex KB matching a prefix.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"prefix\":{\"type\":\"string\",\"default\":\"\"},\"max\":{\"type\":\"integer\",\"default\":50}},\"required\":[\"prefix\"]}},{\"name\":\"atex_stats\",\"description\":\"Get atex KB statistics and unbiased context tracker report path for the current conversation.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{}}}]}}\n");
+			out.append(",\"result\":{\"tools\":[{\"name\":\"atex_search\",\"description\":\"Keyword search over the local atex knowledge base. Returns each matching key with a line range, the best-matching lines, and an also: list of every other matching line number. A footer enumerates all remaining matching keys; pass page=N for the next set. exact=true scans all stored text for a literal case-insensitive string and returns key:line rows. Try it before reading whole files.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\",\"description\":\"Search keywords\"},\"k\":{\"type\":\"integer\",\"default\":3},\"max_chars\":{\"type\":\"integer\",\"default\":600},\"page\":{\"type\":\"integer\",\"default\":1},\"exact\":{\"type\":\"boolean\",\"default\":false}},\"required\":[\"query\"]}},{\"name\":\"atex_recall\",\"description\":\"Exact-key lookup in the atex knowledge base. Returns the stored text, or the line range given by lines=\"a-b\" (as shown by atex_search). Truncated output names the exact remaining line range.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"key\":{\"type\":\"string\"},\"max_chars\":{\"type\":\"integer\",\"default\":2400},\"lines\":{\"type\":\"string\",\"description\":\"Line range a-b\"}},\"required\":[\"key\"]}},{\"name\":\"atex_remember\",\"description\":\"Persist a learned fact to the atex knowledge base under namespace manual::.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"key\":{\"type\":\"string\"},\"text\":{\"type\":\"string\"}},\"required\":[\"key\",\"text\"]}},{\"name\":\"atex_list_keys\",\"description\":\"List keys in the atex KB matching a prefix.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"prefix\":{\"type\":\"string\",\"default\":\"\"},\"max\":{\"type\":\"integer\",\"default\":50}},\"required\":[\"prefix\"]}},{\"name\":\"atex_stats\",\"description\":\"Get atex KB statistics and unbiased context tracker report path for the current conversation.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{}}}]}}\n");
 			write_stdout(out[..]);
 			flush_stdout();
 		} else if m == "ping" {
@@ -1311,11 +1496,15 @@ fn main() {
 				let mv, okm = json::as_i64(d, json::member(d, args_node, "max_chars"));
 				let k = if okk { kv } else { DEF_K };
 				let mc = if okm { mv } else { DEF_MC };
-				let res = search_text(q, k, mc);
+				let pv, okp = json::as_i64(d, json::member(d, args_node, "page"));
+				let xv, okx = json::as_bool(d, json::member(d, args_node, "exact"));
+				let pg = if okp { pv } else { 1 };
+				let res = if okx && xv { exact_text(q, k, mc, pg) } else { search_text(q, k, mc, pg) };
 				send_ok_text(d, id_node, res[..], false);
 			} else if tname == "atex_recall" {
 				let key, _ = json::as_string(d, json::member(d, args_node, "key"));
 				let mv, okm = json::as_i64(d, json::member(d, args_node, "max_chars"));
+				let lv, okl = json::as_string(d, json::member(d, args_node, "lines"));
 				let mc = if okm { mv } else { 2400 };
 				if !valid_key(key) {
 					send_err(d, id_node, -32602, "tool atex_recall invalid input: invalid key");
@@ -1324,14 +1513,38 @@ fn main() {
 				} else {
 					let id = get(KMAP, key, 0);
 					let txt = entry_text(id);
-					if mc > 0 && txt.len > mc {
+					if okl && lv.len > 0 {
 						var res byte[>..] = [];
-						res.append(txt[..mc]);
-						res.append("\n... [truncated at ");
-						format(res, mc);
+						var sl byte[>..] = [];
+						if slice_lines(txt, lv, sl) {
+							res.append(key);
+							res.append(" L");
+							res.append(trim(lv));
+							res.append(" of ");
+							format(res, line_of(txt, txt.len));
+							res.push('\n');
+							res.append(sl[..]);
+							send_ok_text(d, id_node, res[..], false);
+						} else {
+							send_err(d, id_node, -32602, "tool atex_recall invalid input: lines must be \"a-b\" with 1 <= a <= b");
+						}
+					} else if mc > 0 && txt.len > mc {
+						var cut = mc;
+						while cut > 0 && txt[cut - 1] != '\n' { cut -= 1; }
+						if cut == 0 { cut = mc; }
+						let shown = line_of(txt, cut - 1);
+						let tot = line_of(txt, txt.len);
+						var res byte[>..] = [];
+						res.append(txt[..cut]);
+						res.append("\n[L1-");
+						format(res, shown);
 						res.append(" of ");
-						format(res, txt.len);
-						res.append(" bytes; pass max_chars=0 for full text]");
+						format(res, tot);
+						res.append("; rest: lines=\"");
+						format(res, if txt[cut - 1] == '\n' { shown + 1 } else { shown });
+						res.push('-');
+						format(res, tot);
+						res.append("\" or max_chars=0]");
 						send_ok_text(d, id_node, res[..], false);
 					} else {
 						send_ok_text(d, id_node, txt, false);
