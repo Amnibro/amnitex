@@ -1,0 +1,12 @@
+{"engine":"atex 0.3.3","k":3,"max_chars":600,"questions":10,"atex_answer_hits":4,"atex_total_chars":16865,"whole_file_answer_hits":10,"whole_file_total_chars":199732,"window41_total_chars":15246,"rows":[
+{"query":"where does the selftest keep its temporary knowledge base","atex_chars":1849,"atex_has_answer":false,"whole_file_chars":46080,"window41_chars":1517},
+{"query":"how many directory levels does init descend","atex_chars":1846,"atex_has_answer":false,"whole_file_chars":46080,"window41_chars":1923},
+{"query":"how is the project slug for conversation keys built","atex_chars":1745,"atex_has_answer":false,"whole_file_chars":46080,"window41_chars":1506},
+{"query":"checksum file published with release assets","atex_chars":1884,"atex_has_answer":false,"whole_file_chars":1358,"window41_chars":1204},
+{"query":"where the installer puts the binary","atex_chars":1436,"atex_has_answer":false,"whole_file_chars":1577,"window41_chars":1108},
+{"query":"list models available on the local ollama server","atex_chars":1887,"atex_has_answer":true,"whole_file_chars":1878,"window41_chars":1800},
+{"query":"database connection pool size in the sample project","atex_chars":1480,"atex_has_answer":true,"whole_file_chars":483,"window41_chars":483},
+{"query":"python tex grid token hash to cell coordinates","atex_chars":1706,"atex_has_answer":false,"whole_file_chars":5058,"window41_chars":1763},
+{"query":"python grid dimension from expected entry count","atex_chars":1818,"atex_has_answer":true,"whole_file_chars":5058,"window41_chars":2000},
+{"query":"which hook event restores state after clear","atex_chars":1214,"atex_has_answer":true,"whole_file_chars":46080,"window41_chars":1942}
+]}

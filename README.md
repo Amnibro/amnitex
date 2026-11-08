@@ -1,7 +1,7 @@
-# atex (amni-tex) — Native Gold/Helium Edition (v0.3.2)
+# atex (amni-tex) — Native Gold/Helium Edition (v0.3.3)
 
 **A lossless local byte-page memory layer for MCP-capable AI coding assistants. It also stores every conversation turn so earlier facts can be recalled exactly.**
-Written in [Gold](https://github.com/Amnibro/gold) and compiled to native [Helium](https://github.com/Amnibro/helium). Local. No embeddings. No cloud. MIT-licensed. **1.66 µs** keyword lookup through a spatial `TexGrid`. Building the grid plus running 3 searches is `17.5×` faster than the earlier Python version, and the process uses `5.2 MB` RSS.
+Written in [Gold](https://github.com/Amnibro/gold) and compiled to native [Helium](https://github.com/Amnibro/helium). Local. No embeddings. No cloud. MIT-licensed. Exact-match nonce lookup through an RGBA texture LUT (`index.tex`): a 15 MB knowledge base loads in 22 ms.
 
 ## Install (Native Helium — One Line)
 
@@ -48,7 +48,7 @@ Every AI coding assistant either forgets your project at session boundaries or r
 
 `atex` targets both problems with a single native Helium binary (`atex_serve.gold` $\rightarrow$ `atex`):
 1. **Lossless Byte-Page Store + 2D Spatial `TexGrid`:** Stores project docs, code symbols, and user-taught facts (`manual::*`) in 1 MiB byte-pages (`ATEXKB01`) indexed by a 64-bit FNV-1a 2D spatial texture grid (`TexGrid`). Subword and snake_case tokens are indexed automatically.
-2. **Conversation turn store (`conv::*`):** Saves every completed turn into `.atex` (`conv::<id>::turn_<N>` and `conv::latest_state`). Prior turns can be pulled back by keyword in **1.66 µs** without loss. The longer-term goal is a "fresh-turn" client that sends only a small fixed window each turn and recalls the rest from atex. **No current assistant client works this way yet**, so the token figures below are projections, not measured savings.
+2. **Conversation turn store (`conv::*`):** Saves every completed turn into `.atex` (`conv::<id>::turn_<N>` and `conv::latest_state`). Prior turns can be pulled back by keyword through the nonce LUT, without loss. The longer-term goal is a "fresh-turn" client that sends only a small fixed window each turn and recalls the rest from atex. **No current assistant client works this way yet**, so the token figures below are projections, not measured savings.
 
 ## Numbers
 
@@ -72,31 +72,34 @@ Reproducible via `./bench_conv_lut_bin` (`bench_conv_lut.gold`, 200 simulated tu
 - **Exact fact recall at turn 200:** `20/20` measured from the atex store (keyword-overlap queries). The `2/20` for lossy summaries is modeled, not measured
 - Interactive charts & full writeup: **[amni-scient.com/amnitex-lut.html](https://amni-scient.com/amnitex-lut.html)**
 
-### Measured: lookup benchmark (v0.3.2)
+### Nonce texture LUT (v0.3.3)
 
-`atex bench bench/lookup_questions.tsv` runs 22 lookups whose answer strings are known. For each one it checks whether the answer text shows up in `atex_search`'s default output (k=3, max_chars=600) and counts the chars returned. The comparison is reading the whole file that holds the answer (capped at 46,080 chars, the size of one `view_file` page) or a 41-line window around it. Results are in [`lookup_bench_results.json`](lookup_bench_results.json).
+Every unique word, symbol and compound identifier (`snake_case`, `dotted.names`, `kebab-case`, plus their parts) gets a sequential 32-bit nonce. Each nonce's entry list is packed into `index.tex`, an RGBA texture (4096 texels wide, one 32-bit value per texel): an offset table, then a postings table. Lookup is word → nonce → offset texel → postings run, with exact matches and no hash-cell collisions. On startup, atex loads the texture directly and rebuilds it only when the KB changes.
 
-| Method | Answer in output | Chars returned (22 lookups) |
-|---|---:|---:|
-| atex v0.3.1 search, repo KB (114 entries) | 5/22 | 43,582 |
-| **atex v0.3.2 search, repo KB** | **15/22** | **35,067** |
-| atex v0.3.1 search, author's working KB (~1,000 entries) | 3/22 | 43,673 |
-| **atex v0.3.2 search, author's working KB** | **14/22** | **35,529** |
-| Read the whole file holding the answer | 22/22 | 604,655 |
-| Read ±20 lines around the answer (requires already knowing where it is) | 22/22 | 48,010 |
+| KB | Unique nonces | Postings | `index.tex` | Cold load | Full rebuild |
+|---|---:|---:|---:|---:|---:|
+| 15.3 MB, 1,225 entries | 80,420 | 373,558 | 2.9 MB (4096×111 RGBA) | 22 ms | 133 ms |
 
-Caveats: the author wrote these questions and tuned the ranker against them, so treat them as a smoke test, not a held-out evaluation. "Answer in output" means the text appears in the output; it does not measure whether a model finished a task. When atex misses (7 of 22 here), the model still has to fall back to grep/read, so those chars are extra cost.
+### Lookup benchmark
 
-What changed in v0.3.2: IDF term weighting (common words like "build" no longer dominate), each entry counted once per term, digits and plurals indexed, results filtered by confidence, snippets with line ranges instead of file heads, and `atex init` now walks 5 directory levels.
+`atex bench <questions.tsv>` runs lookups with known answers. It records whether the answer text appears in `atex_search`'s default output (k=3, max_chars=600) and how many chars were returned, and compares that with reading the whole file or a 41-line window around the answer. Results: [`lookup_bench_results.json`](lookup_bench_results.json), [`lookup_heldout_results.json`](lookup_heldout_results.json).
 
-### Claude Code turn hooks (v0.3.2)
+| Set | atex v0.3.1 | atex v0.3.3 | atex v0.3.3 chars | Whole-file chars |
+|---|---:|---:|---:|---:|
+| Tuning set (22), repo KB | 5/22 | 16/22 | 31,876 | 624,554 |
+| Tuning set (22), 15 MB KB | 3/22 | 16/22 | 35,519 | 624,554 |
+| Held-out set (10), repo KB | – | 4/10 | 16,744 | 199,732 |
 
-`atex install` (or the Claude Code plugin's `hooks/hooks.json`) adds two hooks:
+v0.3.3 ranking: IDF weights over exact nonces, a passage re-rank (query terms found within ±1 line), a bonus for definition lines, plural/`-ies`/`-ed`/`-er` stemming, a code-vocabulary map (directory→dir, environment→env, python→py …), confidence filtering, line-range snippets, and generated `.amni` files skipped when their `.gold` source is present.
 
-- **Stop** → `atex hook stop` saves the turn's user prompt, final assistant text and touched files as `conv::<project>::turn_<N>`, and refreshes `conv::<project>::latest_state`.
-- **SessionStart** (only on `/clear` or compaction) → `atex hook start` injects `latest_state`: the last three turns, with the newest capped at 2,400 chars and the two before it at 900. In a test on real transcripts it was 4,391 bytes (~1.1K tokens). Normal startup injects nothing.
+### Claude Code turn hooks
 
-This lets you `/clear` whenever the context gets heavy and carry on with recent state, with older turns retrievable through `atex_recall`/`atex_search`. The saving comes from clearing more often. How much it saves in practice has not been measured on live API usage yet.
+`atex install` (or the Claude Code plugin's `hooks/hooks.json`) adds:
+
+- **Stop** → `atex hook stop` saves the turn's prompt, final reply and touched files as `conv::<project>::turn_<N>`, and refreshes `conv::<project>::latest_state`.
+- **SessionStart** (on `/clear` or compaction) → `atex hook start` injects `latest_state`, about 1.1K tokens holding the last three turns.
+
+Run `/clear` whenever the context gets heavy. Recent state comes back automatically, and older turns stay available through `atex_recall` / `atex_search`.
 
 ### Scale-validated retrieval (v0.2.0 spatial tex-grid)
 

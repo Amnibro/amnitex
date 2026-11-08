@@ -1,6 +1,6 @@
 {
   "name": "amnitex",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Lossless local byte-page memory for MCP assistants in native Gold/Helium.",
   "author": {
     "name": "Amniscient, LLC",
@@ -15,8 +15,8 @@
   "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "AmniTex (Native Helium LUT)",
-    "shortDescription": "1.66 µs local keyword memory over a spatial TexGrid",
-    "longDescription": "Compiles to a native Gold/Helium binary with 1.66 µs keyword lookup over a spatial TexGrid. Stores project knowledge and every conversation turn losslessly so exact facts can be recalled later.",
+    "shortDescription": "Exact-match nonce texture LUT memory",
+    "longDescription": "Compiles to a native Gold/Helium binary with exact-match nonce lookup through an RGBA texture LUT. Stores project knowledge and every conversation turn losslessly so exact facts can be recalled later.",
     "developerName": "Amniscient, LLC",
     "category": "Productivity",
     "capabilities": ["Interactive", "Write"],

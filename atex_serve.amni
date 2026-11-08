@@ -9,14 +9,15 @@ var PAGES Page[>..];
 var PDATA byte[>..][>..];
 var ENTRIES Entry[>..];
 var KMAP dictionary<const byte[:], int>;
-var GW = 256;
-var GH = 256;
-var GCELLS int[>..];
-var GNEXT byte[>..];
-var GOVF int[>..];
 var GBUILT = false;
-var SEEN uint[>..];
-var GEN uint = 1;
+var VOCAB dictionary<uint, int>;
+var VARENA byte[>..];
+var VOFF int[>..];
+var LASTID int[>..];
+var PAIRS int[>..];
+var OFFS int[>..];
+var PST int[>..];
+var TEX_W = 4096;
 var LAST_MTIME = 0;
 var PAGE_W = 4096;
 var PAGE_H = 64;
@@ -36,6 +37,7 @@ fn is_stop(w const byte[:]) bool {
 fn is_tok_start(c byte) bool { (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') }
 fn is_tok_lead(c byte) bool { is_tok_start(c) || (c >= '0' && c <= '9') }
 fn is_plural(w const byte[:]) bool { w.len > 3 && w[w.len - 1] == 's' && w[w.len - 2] != 's' && is_tok_start(w[w.len - 2]) }
+fn stem_y(w const byte[:]) const byte[:] { if w.len > 4 && ends_with(w, "y") && !is_stop(w) { w[..w.len - 1] } else { w } }
 fn has_word(h const byte[:], w const byte[:]) bool {
 	var from = 0;
 	while from < h.len {
@@ -48,13 +50,6 @@ fn has_word(h const byte[:], w const byte[:]) bool {
 	false
 }
 fn is_tok_cont(c byte) bool { is_tok_start(c) || (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.' }
-fn auto_dim(n int) int {
-	if n <= 0 { return 256; }
-	let t = max(256, n * 16);
-	var s = 1;
-	while s * s < t { s *= 2; }
-	min(s, 4096)
-}
 fn ensure_page_loaded(p int) {
 	while PDATA.len <= p {
 		var empty byte[>..] = [];
@@ -71,43 +66,64 @@ fn entry_text(id int) const byte[:] {
 	let d .= PDATA[e.page];
 	if e.off >= 0 && e.off + e.len <= d.len { d[e.off..e.off + e.len] } else { "" }
 }
-fn grid_put_word(w const byte[:], eid int, mask uint, sh uint) {
-	if is_plural(w) { grid_put_word(w[..w.len - 1], eid, mask, sh); }
-	if w.len < 2 || is_stop(w) { return; }
-	let h = hash(w);
-	let sidx = (h & 4095) as int;
-	let tag = (h & 0xfffffffffffff000) | (GEN & 4095);
-	if SEEN[sidx] != tag {
-		SEEN[sidx] = tag;
-		let x = (h & mask) as int;
-		let y = ((h >> sh) & mask) as int;
-		let c = y * GW + x;
-		let sl = GNEXT[c] as int;
-		if sl < 4 {
-			GCELLS[c * 4 + sl] = eid;
-			GNEXT[c] = (sl + 1) as byte;
-		} else {
-			let prev = GCELLS[c * 4 + 3];
-			let head = if sl == 4 {
-				let hidx = GOVF.len;
-				GOVF.push(prev);
-				GOVF.push(-1);
-				GNEXT[c] = 5;
-				hidx
-			} else { prev };
-			let nidx = GOVF.len;
-			GOVF.push(eid);
-			GOVF.push(head);
-			GCELLS[c * 4 + 3] = nidx;
-		}
+fn nonce_find(w const byte[:]) int {
+	var h = hash(w);
+	while contains(VOCAB, h) {
+		let n = get(VOCAB, h, 0);
+		if word_at(n) == w { return n; }
+		h = (h >> 1) ^ 0x5bd1e9955bd1e995;
 	}
+	-1
 }
-fn index_text(s const byte[:], eid int) {
+fn nonce_add(w const byte[:]) int {
+	var h = hash(w);
+	while contains(VOCAB, h) {
+		let n = get(VOCAB, h, 0);
+		if word_at(n) == w { return n; }
+		h = (h >> 1) ^ 0x5bd1e9955bd1e995;
+	}
+	let n = VOFF.len;
+	VOFF.push(VARENA.len);
+	VARENA.append(w);
+	LASTID.push(-1);
+	insert(VOCAB, h, n);
+	n
+}
+fn post_word(w const byte[:], id int) {
+	if is_plural(w) { post_word(w[..w.len - 1], id); }
+	if w.len < 2 || is_stop(w) { return; }
+	let n = nonce_add(w);
+	if LASTID[n] != id { LASTID[n] = id; PAIRS.push(n); PAIRS.push(id); }
+}
+fn postings(n int, out int[>..]&) {
+	if n < 0 { return; }
+	if n + 1 < OFFS.len { for j in OFFS[n]..OFFS[n + 1] { out.push(PST[j]); } }
+	var j = 0;
+	while j + 1 < PAIRS.len { if PAIRS[j] == n { out.push(PAIRS[j + 1]); } j += 2; }
+}
+fn finalize_lut() {
+	let nv = VOFF.len;
+	OFFS.clear();
+	OFFS.resize(nv + 1, 0);
+	var j = 0;
+	while j + 1 < PAIRS.len { OFFS[PAIRS[j] + 1] += 1; j += 2; }
+	for n in 0..nv { OFFS[n + 1] += OFFS[n]; }
+	PST.clear();
+	PST.resize(OFFS[nv], 0);
+	var cur int[>..] = [];
+	cur.append(OFFS[..nv]);
+	j = 0;
+	while j + 1 < PAIRS.len { let n = PAIRS[j]; PST[cur[n]] = PAIRS[j + 1]; cur[n] += 1; j += 2; }
+	PAIRS.clear();
+}
+fn word_at(n int) const byte[:] {
+	let e = if n + 1 < VOFF.len { VOFF[n + 1] } else { VARENA.len };
+	VARENA[VOFF[n]..e]
+}
+fn index_text(s const byte[:], id int) {
 	var i = 0;
 	var w byte[..128] = [];
 	var sub byte[..128] = [];
-	let mask = (GW - 1) as uint;
-	let sh = (63 - clz(GW as uint)) as uint;
 	while i < s.len {
 		if is_tok_lead(s[i]) {
 			let a = i;
@@ -121,55 +137,155 @@ fn index_text(s const byte[:], eid int) {
 					if lc == '_' || lc == '-' || lc == '.' { has_sep = true; }
 					w.push(lc);
 				}
-				grid_put_word(w[..], eid, mask, sh);
+				post_word(w[..], id);
 				if has_sep {
 					sub.clear();
 					for k in 0..w.len {
 						let c = w[k];
-						if c == '_' || c == '-' || c == '.' {
-							grid_put_word(sub[..], eid, mask, sh);
-							sub.clear();
-						} else { sub.push(c); }
+						if c == '_' || c == '-' || c == '.' { post_word(sub[..], id); sub.clear(); } else { sub.push(c); }
 					}
-					grid_put_word(sub[..], eid, mask, sh);
+					post_word(sub[..], id);
 				}
 			}
 		} else { i += 1; }
 	}
 }
 fn grid_insert(id int, key const byte[:], text const byte[:]) {
-	if SEEN.len < 4096 { SEEN.resize(4096, 0); }
-	GEN += 1;
-	let eid = id + 1;
-	index_text(key, eid);
-	index_text(text, eid);
+	index_text(key, id);
+	index_text(text, id);
+}
+fn put_u32(out byte[>..]&, v int) {
+	out.push((v & 255) as byte);
+	out.push(((v >> 8) & 255) as byte);
+	out.push(((v >> 16) & 255) as byte);
+	out.push(((v >> 24) & 255) as byte);
+}
+fn get_u32(b const byte[:], o int) int { (b[o] as int) | ((b[o + 1] as int) << 8) | ((b[o + 2] as int) << 16) | ((b[o + 3] as int) << 24) }
+fn kb_sig() byte[>..] {
+	var b byte[>..] = [];
+	put_u32(b, ENTRIES.len);
+	for e in ENTRIES { put_u32(b, e.page); put_u32(b, e.off); put_u32(b, e.len); }
+	let h = hash(b[..]);
+	var s byte[>..] = [];
+	for k in 0..8 { s.push(((h >> ((k * 8) as uint)) & 255) as byte); }
+	s
+}
+fn save_tex() {
+	var out byte[>..] = [];
+	out.append("ATEXTEX1");
+	let nv = VOFF.len;
+	let np = PST.len;
+	let texels = nv + 1 + np;
+	let th = (texels + TEX_W - 1) / TEX_W;
+	put_u32(out, TEX_W);
+	put_u32(out, th);
+	put_u32(out, nv);
+	put_u32(out, np);
+	out.append(kb_sig()[..]);
+	for n in 0..nv { let w = word_at(n); out.push((w.len & 255) as byte); out.append(w); }
+	for n in 0..nv + 1 { put_u32(out, OFFS[n]); }
+	for v in PST { put_u32(out, v); }
+	for k in texels..th * TEX_W { put_u32(out, 0); }
+	write_file_atomic(str(ADIR, "/index.tex"), out[..]);
+}
+fn reset_lut() {
+	clear(VOCAB);
+	VARENA.clear();
+	VOFF.clear();
+	LASTID.clear();
+	PAIRS.clear();
+	OFFS.clear();
+	PST.clear();
+}
+fn load_tex() bool {
+	var b byte[>..] = [];
+	if !read_file(str(ADIR, "/index.tex"), b) || b.len < 32 || b[..8] != "ATEXTEX1" { return false; }
+	let nv = get_u32(b, 16);
+	let np = get_u32(b, 20);
+	if b[24..32] != kb_sig()[..] { return false; }
+	var o = 32;
+	for n in 0..nv {
+		if o >= b.len { return false; }
+		let l = b[o] as int;
+		o += 1;
+		if o + l > b.len { return false; }
+		nonce_add(b[o..o + l]);
+		o += l;
+	}
+	let pb = o + (nv + 1) * 4;
+	if pb + np * 4 > b.len || VOFF.len != nv { return false; }
+	OFFS.resize(nv + 1, 0);
+	for n in 0..nv + 1 { OFFS[n] = get_u32(b, o + n * 4); }
+	if OFFS[nv] != np { return false; }
+	PST.resize(np, 0);
+	for j in 0..np { PST[j] = get_u32(b, pb + j * 4); }
+	true
 }
 fn build_grid() {
-	GW = auto_dim(ENTRIES.len);
-	GH = GW;
-	GCELLS.clear();
-	GCELLS.resize(GW * GH * 4, 0);
-	GNEXT.clear();
-	GNEXT.resize(GW * GH, 0);
-	GOVF.clear();
-	for i in 0..ENTRIES.len { grid_insert(i, ENTRIES[i].key[..], entry_text(i)); }
+	reset_lut();
+	if !load_tex() {
+		reset_lut();
+		for i in 0..ENTRIES.len { grid_insert(i, ENTRIES[i].key[..], entry_text(i)); }
+		finalize_lut();
+		save_tex();
+	}
 	GBUILT = true;
 }
-struct QTerm { w byte[..128], wt int, cell int }
+struct QTerm { w byte[..128], wt int, cell int, syn int }
 var SN_B0 = 0;
 var SN_B1 = 0;
+var SN_WIN = 0;
 fn lower_into(s const byte[:], out byte[>..]&) {
 	out.clear();
 	for c in s { out.push(lower(c)); }
 }
+fn code_syn(w const byte[:]) const byte[:] {
+	if w == "directory" || w == "folder" { return "dir"; }
+	if w == "environment" { return "env"; }
+	if w == "variable" || w == "constant" { return "var"; }
+	if w == "configuration" { return "config"; }
+	if w == "maximum" || w == "largest" || w == "limit" { return "max"; }
+	if w == "minimum" || w == "smallest" { return "min"; }
+	if w == "length" || w == "size" { return "len"; }
+	if w == "function" || w == "method" { return "fn"; }
+	if w == "argument" || w == "parameter" { return "arg"; }
+	if w == "number" { return "num"; }
+	if w == "string" { return "str"; }
+	if w == "message" { return "msg"; }
+	if w == "error" { return "err"; }
+	if w == "initialize" { return "init"; }
+	if w == "repository" { return "repo"; }
+	if w == "database" { return "db"; }
+	if w == "temporary" { return "tmp"; }
+	if w == "index" { return "idx"; }
+	if w == "dimension" { return "dim"; }
+	if w == "coordinate" { return "xy"; }
+	if w == "temp" { return "tmp"; }
+	if w == "reference" { return "ref"; }
+	if w == "python" { return "py"; }
+	if w == "javascript" { return "js"; }
+	if w == "typescript" { return "ts"; }
+	if w == "kotlin" { return "kt"; }
+	if w == "rust" { return "rs"; }
+	if w == "markdown" { return "md"; }
+	if w == "shell" || w == "bash" { return "sh"; }
+	if w == "checksum" || w == "hash" { return "sha"; }
+	if w == "binary" || w == "executable" { return "bin"; }
+	if w == "built" { return "build"; }
+	""
+}
 fn add_qterm(terms QTerm[>..]&, w0 const byte[:]) {
 	let w = if is_plural(w0) { w0[..w0.len - 1] } else { w0 };
+	add_term_raw(terms, w, 0);
+	let s = code_syn(w);
+	if s.len > 0 { add_term_raw(terms, s, 1); }
+	if w.len > 5 && (ends_with(w, "er") || ends_with(w, "ed")) { add_term_raw(terms, w[..w.len - 2], 1); }
+	if w.len > 6 && ends_with(w, "ing") { add_term_raw(terms, w[..w.len - 3], 1); }
+}
+fn add_term_raw(terms QTerm[>..]&, w const byte[:], syn int) {
 	if w.len < 2 || is_stop(w) { return; }
 	for i in 0..terms.len { if terms[i].w[..] == w { return; } }
-	let mask = (GW - 1) as uint;
-	let sh = (63 - clz(GW as uint)) as uint;
-	let h = hash(w);
-	var t = QTerm { wt: 0, cell: (((h >> sh) & mask) as int) * GW + ((h & mask) as int), .. };
+	var t = QTerm { wt: 0, cell: nonce_find(w), syn: syn, .. };
 	t.w.append(w);
 	terms.push(t);
 }
@@ -204,20 +320,6 @@ fn query_terms(q const byte[:]) QTerm[>..] {
 	}
 	terms
 }
-fn cell_ids(c int, out int[>..]&) {
-	let n = GNEXT[c] as int;
-	if n <= 4 {
-		for sl in 0..n { let eid = GCELLS[c * 4 + sl]; if eid > 0 { out.push(eid - 1); } }
-	} else {
-		for sl in 0..3 { let eid = GCELLS[c * 4 + sl]; if eid > 0 { out.push(eid - 1); } }
-		var cur = GCELLS[c * 4 + 3];
-		while cur >= 0 {
-			let eid = GOVF[cur];
-			if eid > 0 { out.push(eid - 1); }
-			cur = GOVF[cur + 1];
-		}
-	}
-}
 fn rank(terms QTerm[>..]&, k int) Hit[>..] {
 	if !GBUILT { build_grid(); }
 	var scores = dictionary<int, int> {};
@@ -226,15 +328,16 @@ fn rank(terms QTerm[>..]&, k int) Hit[>..] {
 	let n = ENTRIES.len + 1;
 	for ti in 0..terms.len {
 		ids.clear();
-		cell_ids(terms[ti].cell, ids);
+		postings(terms[ti].cell, ids);
 		if ids.len == 0 { continue; }
 		sort(ids[..]) { a, b => a < b };
 		var df = 0;
 		for j in 0..ids.len { if j == 0 || ids[j] != ids[j - 1] { df += 1; } }
 		let r = max(1, (n * 4) / (df + 1));
-		let wt = (64 - clz(r as uint)) as int;
+		let wt0 = (64 - clz(r as uint)) as int;
+		let wt = if terms[ti].syn == 1 { max(1, wt0 / 2) } else { wt0 };
 		terms[ti].wt = wt;
-		total += wt;
+		if terms[ti].syn == 0 { total += wt; }
 		for j in 0..ids.len { if j == 0 || ids[j] != ids[j - 1] { update(scores, ids[j], 0) { it += wt; }; } }
 	}
 	var hits Hit[>..] = [];
@@ -243,12 +346,20 @@ fn rank(terms QTerm[>..]&, k int) Hit[>..] {
 		if sc * 3 >= total {
 			var s = sc;
 			lower_into(ENTRIES[id].key[..], kl);
-			for ti in 0..terms.len { if terms[ti].wt > 0 && has_word(kl[..], terms[ti].w[..]) { s += terms[ti].wt; } }
+			for ti in 0..terms.len { if terms[ti].wt > 0 && has_word(kl[..], stem_y(terms[ti].w[..])) { s += terms[ti].wt; } }
 			if starts_with(ENTRIES[id].key[..], "manual::") { s += 2; }
 			hits.push(Hit { id: id, score: s });
 		}
 	};
 	sort(hits[..]) { a, b => a.score > b.score || (a.score == b.score && (ENTRIES[a.id].len < ENTRIES[b.id].len || (ENTRIES[a.id].len == ENTRIES[b.id].len && a.id < b.id))) };
+	let nre = min(hits.len, 40);
+	var scr byte[>..] = [];
+	for j in 0..nre {
+		scr.clear();
+		snippet(entry_text(hits[j].id), terms, 600, scr);
+		hits[j].score = SN_WIN * 2 + hits[j].score;
+	}
+	sort(hits[..nre]) { a, b => a.score > b.score || (a.score == b.score && (ENTRIES[a.id].len < ENTRIES[b.id].len || (ENTRIES[a.id].len == ENTRIES[b.id].len && a.id < b.id))) };
 	var out Hit[>..] = [];
 	if hits.len == 0 { return out; }
 	let best = hits[0].score;
@@ -276,6 +387,7 @@ fn mask_wt(terms QTerm[>..]&, m uint) int {
 fn snippet(txt const byte[:], terms QTerm[>..]&, mc int, out byte[>..]&) int {
 	var st int[>..] = [];
 	var sc uint[>..] = [];
+	var df bool[>..] = [];
 	var lb byte[>..] = [];
 	var a = 0;
 	while a < txt.len {
@@ -283,9 +395,11 @@ fn snippet(txt const byte[:], terms QTerm[>..]&, mc int, out byte[>..]&) int {
 		while e < txt.len && txt[e] != '\n' { e += 1; }
 		lower_into(txt[a..min(e, a + 2048)], lb);
 		var m uint = 0;
-		for ti in 0..min(terms.len, 64) { if terms[ti].wt > 0 && has_word(lb[..], terms[ti].w[..]) { m = m | ((1 as uint) << (ti as uint)); } }
+		for ti in 0..min(terms.len, 64) { if terms[ti].wt > 0 && has_word(lb[..], stem_y(terms[ti].w[..])) { m = m | ((1 as uint) << (ti as uint)); } }
 		st.push(a);
 		sc.push(m);
+		let tl = trim(lb[..]);
+		df.push(starts_with(tl, "fn ") || starts_with(tl, "def ") || starts_with(tl, "class ") || starts_with(tl, "struct ") || starts_with(tl, "function ") || starts_with(tl, "pub fn ") || starts_with(tl, "#") || starts_with(tl, "var ") || starts_with(tl, "const ") || starts_with(tl, "let ") || starts_with(tl, "export "));
 		a = e + 1;
 	}
 	st.push(a);
@@ -297,9 +411,11 @@ fn snippet(txt const byte[:], terms QTerm[>..]&, mc int, out byte[>..]&) int {
 		var wm = sc[j];
 		if j > 0 { wm = wm | sc[j - 1]; }
 		if j + 1 < nl { wm = wm | sc[j + 1]; }
-		let v = mask_wt(terms, wm) * 4 + mask_wt(terms, sc[j]);
+		let cw = mask_wt(terms, sc[j]);
+		let v = mask_wt(terms, wm) * 4 + cw + (if df[j] { cw * 3 } else { 0 });
 		if v > bs { bs = v; b = j; }
 	}
+	SN_WIN = bs;
 	SN_B0 = st[b];
 	SN_B1 = min(st[b + 1] - 1, txt.len);
 	var s = 0;
@@ -581,7 +697,7 @@ fn walk_index(dir const byte[:], rel const byte[:], depth int) int {
 		if is_dir(full) {
 			if depth < 5 { count += walk_index(full[..], r[..], depth + 1); }
 		} else if is_indexable_file(nm) {
-			count += ingest_doc("project", r[..], full[..]);
+			if !(ends_with(nm, ".amni") && file_exists(str(full[..full.len - 5], ".gold"))) { count += ingest_doc("project", r[..], full[..]); }
 		}
 	}
 	count
@@ -1058,7 +1174,7 @@ fn run_bench(tsv const byte[:]) {
 		rows.append("}");
 	}
 	var out byte[>..] = [];
-	out.append("{\"engine\":\"atex 0.3.2\",\"k\":");
+	out.append("{\"engine\":\"atex 0.3.3\",\"k\":");
 	format(out, DEF_K);
 	out.append(",\"max_chars\":");
 	format(out, DEF_MC);
@@ -1089,11 +1205,11 @@ fn main() {
 	while i < av.len {
 		let a = av[i];
 		if a == "--version" || a == "-v" {
-			write_stdout("atex 0.3.2 (gold/helium-native)\n");
+			write_stdout("atex 0.3.3 (gold/helium-native)\n");
 			flush_stdout();
 			return;
 		} else if a == "--help" || a == "-h" || a == "help" {
-			write_stdout("atex 0.3.2 (gold/helium-native)\nUsage:\n  atex [serve] [--atex-dir <dir>]     Run MCP stdio server\n  atex init [project_dir] [--atex-dir <dir>]  Index project docs & code into KB\n  atex install [--atex-dir <dir>]     Auto-wire Claude, Cursor, Windsurf, Gemini, Codex\n  atex stats [--atex-dir <dir>]       Print knowledge base statistics\n  atex bench <questions.tsv>          Measure answer recall and output size vs whole-file reads\n  atex --selftest                     Run end-to-end TexGrid & byte-page self-test\n");
+			write_stdout("atex 0.3.3 (gold/helium-native)\nUsage:\n  atex [serve] [--atex-dir <dir>]     Run MCP stdio server\n  atex init [project_dir] [--atex-dir <dir>]  Index project docs & code into KB\n  atex install [--atex-dir <dir>]     Auto-wire Claude, Cursor, Windsurf, Gemini, Codex\n  atex stats [--atex-dir <dir>]       Print knowledge base statistics\n  atex bench <questions.tsv>          Measure answer recall and output size vs whole-file reads\n  atex --selftest                     Run end-to-end TexGrid & byte-page self-test\n");
 			flush_stdout();
 			return;
 		} else if a == "--selftest" || a == "selftest" {
@@ -1152,7 +1268,7 @@ fn main() {
 			var out byte[>..] = [];
 			out.append("{\"jsonrpc\":\"2.0\",");
 			write_id(out, d, id_node);
-			out.append(",\"result\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"atex-gold\",\"version\":\"0.3.2\"}}}\n");
+			out.append(",\"result\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"atex-gold\",\"version\":\"0.3.3\"}}}\n");
 			write_stdout(out[..]);
 			flush_stdout();
 		} else if m == "tools/list" {

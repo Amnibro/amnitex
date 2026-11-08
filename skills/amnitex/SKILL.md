@@ -8,7 +8,7 @@ description: Lossless local byte-page memory in native Gold/Helium. Always call 
 ## Mandatory Retrieval Order
 
 1. **At the start of a turn or when resuming context:** Call `atex_recall(key="conv::latest_state")` to inspect the stateless conversation LUT index (`conv::<id>::turn_<N>`) and active edited files before scanning the repository.
-2. **Before running `grep`, `find`, or reading full files:** Call `atex_search(query="...")` or `atex_list_keys(prefix="...")` to locate exact documentation sections, architecture maps, build rules, and prior turn facts in **1.66 µs** via the native Helium spatial `TexGrid`.
+2. **Before running `grep`, `find`, or reading full files:** Call `atex_search(query="...")` or `atex_list_keys(prefix="...")` to locate exact documentation sections, architecture maps, build rules, and prior turn facts through the native Helium nonce texture LUT.
 3. **When the user teaches a persistent project fact:** Call `atex_remember(key="manual::<topic>", text="...")` so it is stored losslessly in `.atex` across sessions and AI tools.
 
 ## Installing the Native Helium Binary

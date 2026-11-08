@@ -1,19 +1,19 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-07-09/server.schema.json",
   "name": "io.github.Amnibro/amnitex",
-  "description": "Lossless local byte-page memory for MCP assistants in native Gold/Helium (1.66 µs lookup).",
+  "description": "Lossless local byte-page memory for MCP assistants in native Gold/Helium (nonce texture LUT).",
   "repository": {
     "url": "https://github.com/Amnibro/amnitex",
     "source": "github"
   },
   "version_detail": {
-    "version": "0.3.2"
+    "version": "0.3.3"
   },
   "packages": [
     {
       "registry_name": "mcpb",
       "name": "https://github.com/Amnibro/amnitex/releases/latest/download/amnitex.mcpb",
-      "version": "0.3.2",
+      "version": "0.3.3",
       "runtime_hint": "native-helium",
       "package_arguments": [
         {

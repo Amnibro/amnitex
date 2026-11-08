@@ -2,7 +2,7 @@
   "$schema": "https://glama.ai/mcp/schemas/server.json",
   "maintainers": ["Amnibro"],
   "name": "amnitex",
-  "description": "Lossless local byte-page memory for MCP assistants in native Gold/Helium: 1.66 µs keyword lookup over a spatial TexGrid; stores every conversation turn for exact recall.",
+  "description": "Lossless local byte-page memory for MCP assistants in native Gold/Helium: exact-match nonce lookup through an RGBA texture LUT; stores every conversation turn for exact recall.",
   "homepage": "https://amni-scient.com/amnitex-lut.html",
   "license": "MIT"
 }

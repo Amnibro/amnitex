@@ -1,0 +1,11 @@
+# held-out set: written after tuning finished; never used to tune the ranker
+where does the selftest keep its temporary knowledge base	/tmp/atex-selftest-kb	atex_serve.gold
+how many directory levels does init descend	depth < 5	atex_serve.gold
+how is the project slug for conversation keys built	fn proj_slug	atex_serve.gold
+checksum file published with release assets	SHA256SUMS	build.sh
+where the installer puts the binary	.local/bin	install.sh
+list models available on the local ollama server	def list_ollama_models	atex/clients/ollama.py
+database connection pool size in the sample project	POOL_SIZE	tests/fixtures/sample_project/db.py
+python tex grid token hash to cell coordinates	def _hash_xy	atex/tex_grid.py
+python grid dimension from expected entry count	def auto_grid_dim	atex/tex_grid.py
+which hook event restores state after clear	SessionStart	atex_serve.gold
