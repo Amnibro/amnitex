@@ -1,39 +1,46 @@
 #!/bin/sh
+# Install the native Helium atex binary and wire it for every Cursor session
+# on this machine. Linux and macOS. Windows: see install.ps1.
 set -eu
 DEST="${ATEX_BIN_DIR:-$HOME/.local/bin}"
 KB="${ATEX_DIR:-$HOME/.atex}"
-REPO="${ATEX_REPO:-Amnibro/amnitex}"
-URL="https://github.com/$REPO/releases/latest/download/amnitex-helium.tar.gz"
+ROOT=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
 mkdir -p "$DEST" "$KB"
 OS="$(uname -s)"
 ARCH="$(uname -m)"
-TMP="$(mktemp -d "${TMPDIR:-/tmp}/atex-install.XXXXXX")"
-trap 'rm -rf "$TMP"' EXIT INT TERM
-if [ -f "./atex_serve_bin" ] && [ "$OS" = "Linux" ] && [ "$ARCH" = "x86_64" ]; then
-  cp "./atex_serve_bin" "$DEST/atex.new"
-elif [ -f "./dist/amnitex-helium/bin/atex-linux-x64" ] && [ "$OS" = "Linux" ] && [ "$ARCH" = "x86_64" ]; then
-  cp "./dist/amnitex-helium/bin/atex-linux-x64" "$DEST/atex.new"
-elif [ -f "./dist/amnitex-helium/src/atex.c" ]; then
-  cc -O3 -I"./dist/amnitex-helium/src" "./dist/amnitex-helium/src/atex.c" -lm -lpthread -o "$DEST/atex.new"
+REAL="$DEST/atex-helium"
+if [ -f "$ROOT/atex_serve.amni" ]; then
+  printf "[amnitex] building native Helium binary (%s/%s) ...\n" "$OS" "$ARCH"
+  HELIUM="${HELIUM:-$ROOT/.helium}" sh "$ROOT/scripts/build-native.sh" "$REAL.new"
 else
-  printf "[amnitex] downloading Helium bundle from %s ...\n" "$URL"
-  curl -fsSL "$URL" | tar -xz -C "$TMP"
-  if [ "$OS" = "Linux" ] && [ "$ARCH" = "x86_64" ] && [ -f "$TMP/amnitex-helium/bin/atex-linux-x64" ]; then
-    cp "$TMP/amnitex-helium/bin/atex-linux-x64" "$DEST/atex.new"
-  else
-    printf "[amnitex] compiling native Helium binary for %s/%s ...\n" "$OS" "$ARCH"
-    cc -O3 -I"$TMP/amnitex-helium/src" "$TMP/amnitex-helium/src/atex.c" -lm -lpthread -o "$DEST/atex.new"
-  fi
+  printf "[amnitex] this installer needs the repository checkout (atex_serve.amni).\n" >&2
+  exit 1
 fi
-chmod 755 "$DEST/atex.new"
-mv -f "$DEST/atex.new" "$DEST/atex"
-"$DEST/atex" --version
-"$DEST/atex" --selftest
-"$DEST/atex" init . --atex-dir "$KB"
-# Python wiring first so Cursor and Grok keep the tested server if the package is installed.
-# The native installer leaves an existing amnitex entry alone.
+chmod 755 "$REAL.new"
+mv -f "$REAL.new" "$REAL"
+cat > "$DEST/atex" <<EOF
+#!/bin/sh
+REAL="$REAL"
+case "\${1:-}" in
+  install|uninstall|doctor|bench-cursor)
+    if PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}" python3 -c 'import atex.cli' >/dev/null 2>&1; then
+      export PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}"
+      exec python3 -m atex.cli "\$@"
+    fi
+    ;;
+esac
+exec "\$REAL" "\$@"
+EOF
+chmod 755 "$DEST/atex"
+"$REAL" --version
+"$REAL" --selftest
+"$REAL" init . --atex-dir "$KB"
+export PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}"
 if python3 -c 'import atex.cli' >/dev/null 2>&1; then
-  python3 -m atex.cli install --atex-dir "$KB"
+  ATEX_BIN="$REAL" python3 -m atex.cli install --atex-dir "$KB"
+else
+  printf "[amnitex] python3 atex package not importable; native MCP wiring only.\n"
 fi
-"$DEST/atex" install --atex-dir "$KB"
-printf "[amnitex] installed native Helium binary at %s/atex (kb=%s)\n" "$DEST" "$KB"
+"$REAL" install --atex-dir "$KB"
+printf "[amnitex] installed %s (wrapper %s/atex, kb=%s)\n" "$REAL" "$DEST" "$KB"
+printf "[amnitex] check: atex doctor\n"

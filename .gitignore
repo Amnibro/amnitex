@@ -34,3 +34,5 @@ paper/*.blg
 paper/*.synctex.gz
 *_bin
 *.gold.lock
+.helium/
+.hclib

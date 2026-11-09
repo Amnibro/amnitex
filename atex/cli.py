@@ -1,5 +1,5 @@
 """atex CLI entry point. Subcommands: init, serve, stats, demo, bench."""
-import argparse,sys
+import argparse,json,sys
 try:sys.stdout.reconfigure(encoding='utf-8')
 except Exception:pass
 try:sys.stderr.reconfigure(encoding='utf-8')
@@ -39,8 +39,11 @@ def main(argv=None)->int:
         print('  stats    print KB stats (entries, pages, disk usage)')
         print('  demo     auto-detect and wire up an MCP-capable AI client (planned)')
         print('  bench    run head-to-head benchmarks vs other memory layers (planned)')
-        print('  hook     save a transcript or print the restored state card')
+        print('  hook     save a transcript, restore state, or handle a Cursor hook event')
         print('  install  wire Cursor and Grok on this machine')
+        print('  uninstall  remove the Cursor and Grok wiring')
+        print('  doctor   check that Cursor wiring is present')
+        print('  bench-cursor  measure a 40-turn session with ATEX off and on')
         print('')
         print('try: atex init --help')
         return 0
@@ -57,6 +60,11 @@ def main(argv=None)->int:
     if cmd=='bench':return _bench(rest)
     if cmd=='hook':return _hook(rest)
     if cmd=='install':return _install(rest)
+    if cmd=='uninstall':return _uninstall(rest)
+    if cmd=='doctor':return _doctor(rest)
+    if cmd=='bench-cursor':
+        from atex.bench.cursor_session import main as bench_cursor
+        return bench_cursor(rest)
     print(f'atex: unknown command "{cmd}". Try: atex --help',file=sys.stderr)
     return 2
 def _hook(argv)->int:
@@ -68,6 +76,8 @@ def _hook(argv)->int:
     from atex.session import cwd_from,default_atex_dir,hook_output,ingest_transcript,load_transcript_path,open_kb,project_slug,read_stdin_payload,transcript_path_from
     payload=read_stdin_payload(sys.stdin.read())
     kind=args.kind.replace('_','-')
+    if kind == 'cursor':
+        return _hook_cursor(payload, args.atex_dir)
     source=str(payload.get('source') or '')
     if kind in ('start','session-start','sessionstart') and source=='startup':
         return 0
@@ -94,14 +104,62 @@ def _hook(argv)->int:
     if out:
         sys.stdout.write(out)
     return 0
+def _hook_cursor(payload, atex_dir)->int:
+    from atex.cursor_policy import Seen, conversation_id, handle, load_seen, save_seen
+    from atex.session import cwd_from, default_atex_dir, ingest_transcript, load_transcript_path, open_kb, project_slug, transcript_path_from
+    from atex.kb import KnowledgeBaseError
+    event=str(payload.get('hook_event_name') or '')
+    directory=atex_dir or default_atex_dir()
+    try:
+        kb=open_kb(directory)
+    except KnowledgeBaseError as exc:
+        print(f'[atex hook] {exc}',file=sys.stderr)
+        return 2
+    cwd=cwd_from(payload)
+    if event in ('stop','Stop','preCompact','PreCompact'):
+        path=transcript_path_from(payload)
+        if path:
+            ingest_transcript(kb, load_transcript_path(path), cwd)
+    card=''
+    if event in ('sessionStart','SessionStart','start'):
+        card=kb.lookup(f'conv::{project_slug(cwd)}::latest_state') or ''
+        payload=dict(payload)
+        payload['_card']=card
+    seen=load_seen(directory, conversation_id(payload))
+    out=handle(payload, seen)
+    save_seen(directory, conversation_id(payload), seen)
+    sys.stdout.write(json.dumps(out, ensure_ascii=False)+'\n')
+    return 0
+def _uninstall(argv)->int:
+    from atex.wire import uninstall
+    ap=argparse.ArgumentParser(prog='atex uninstall')
+    ap.add_argument('--home',default=None)
+    ap.add_argument('--dry-run',action='store_true')
+    args=ap.parse_args(argv)
+    for note in uninstall(home=args.home, dry_run=args.dry_run):
+        print(note)
+    return 0
+def _doctor(argv)->int:
+    from atex.wire import doctor
+    ap=argparse.ArgumentParser(prog='atex doctor')
+    ap.add_argument('--home',default=None)
+    ap.add_argument('--binary',default=None)
+    args=ap.parse_args(argv)
+    lines=doctor(home=args.home, binary=args.binary)
+    for line in lines:
+        print(line)
+    return 0 if lines and lines[-1]=='doctor ok' else 2
 def _install(argv)->int:
     from atex.wire import install
     ap=argparse.ArgumentParser(prog='atex install')
     ap.add_argument('--home',default=None)
     ap.add_argument('--atex-dir',default=None)
+    ap.add_argument('--binary',default=None,help='native atex binary; defaults to $ATEX_BIN')
     ap.add_argument('--dry-run',action='store_true')
     args=ap.parse_args(argv)
-    notes=install(home=args.home,atex_dir=args.atex_dir,dry_run=args.dry_run)
+    import os
+    command=args.binary or os.environ.get('ATEX_BIN') or None
+    notes=install(home=args.home,atex_dir=args.atex_dir,dry_run=args.dry_run,command=command)
     for note in notes:
         print(note)
     return 0

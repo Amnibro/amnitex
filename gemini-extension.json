@@ -4,8 +4,8 @@
   "description": "Lossless local byte-page memory for MCP assistants in native Gold/Helium.",
   "mcpServers": {
     "amnitex": {
-      "command": "python3",
-      "args": ["-m", "atex.cli", "serve"]
+      "command": "atex",
+      "args": ["serve"]
     }
   },
   "contextFileName": "skills/amnitex/SKILL.md"

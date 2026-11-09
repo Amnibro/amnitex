@@ -1,8 +1,8 @@
 {
   "mcpServers": {
     "amnitex": {
-      "command": "python3",
-      "args": ["-m", "atex.cli", "serve"]
+      "command": "atex",
+      "args": ["serve"]
     }
   }
 }
