@@ -1,6 +1,6 @@
 ---
 name: amnitex
-description: Lossless local byte-page memory in native Gold/Helium. Always call atex_search, atex_recall, and atex_list_keys FIRST before running grep, find, or reading full files.
+description: Lossless local byte-page memory in native Gold/Helium. Call atex_where, atex_search, and atex_recall before reading full files.
 ---
 
 # AmniTex (Native Gold/Helium Memory)

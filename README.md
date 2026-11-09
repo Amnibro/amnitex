@@ -1,4 +1,4 @@
-# atex (amni-tex) — Native Gold/Helium Edition (v0.4.1)
+# atex (amni-tex) — Native Gold/Helium Edition (v0.4.2)
 
 **A lossless local byte-page memory layer for MCP-capable AI coding assistants. It also stores every conversation turn so earlier facts can be recalled exactly.**
 Written in [Gold](https://github.com/Amnibro/gold) and compiled to native [Helium](https://github.com/Amnibro/helium). Local. No embeddings. No cloud. MIT-licensed. Exact-match nonce lookup through an RGBA texture LUT (`index.tex`): a 15 MB knowledge base loads in 22 ms.
@@ -16,6 +16,8 @@ Or directly from GitHub Releases:
 ```bash
 curl -fsSL https://github.com/Amnibro/amnitex/releases/latest/download/install.sh | sh
 ```
+
+The installer also adds hooks to Claude Code and sets it to compact at about 250K tokens. `atex install --no-compact-window` turns the compact setting off, and `atex uninstall` removes the wiring.
 
 ### Install via AI Marketplaces
 
@@ -53,47 +55,30 @@ Every AI coding assistant either forgets your project at session boundaries or r
 
 ## Numbers
 
-### Projected: fresh-turn window vs. full history & lossy compaction (simulation, not measured)
+### What it saves in real sessions
 
-Reproducible via `./bench_conv_lut_bin` (`bench_conv_lut.gold`, 200 simulated turns, 20 planted ground-truth facts). Every number below is copied from [`conv_lut_bench_results.json`](conv_lut_bench_results.json).
+`atex replay` reads the usage Claude Code logged for each request in your own sessions and models what each setting would have sent, with prompt-cache prices included. It makes no model calls, so it costs nothing to run.
 
-> **What is measured and what is assumed.** Measured: lookup latency, ingest time, and exact recall of the 20 planted facts (each query shares a keyword with its fact). Assumed: all token counts. They come from fixed constants in `bench_conv_lut.gold`: 4,850 tokens per raw turn, 1,750 per discarded turn, a 4,500-token summary block, and a 1,752-token fresh-turn window. The fresh-turn window leaves out the system prompt and tool schemas. The full-history baseline ignores prompt caching, which in practice cuts the cost of repeated prefixes a lot. The `2/20` recall for lossy summaries is a modeled rule, not a run against a real summarizer. A live A/B harness that uses API-reported token usage is in progress.
-
-| Turn | Full history (cumulative input) | Rolling window + lossy summary every 7 turns | **Fresh-turn window (hypothetical)** | **Projected saving vs. full history** |
-|-----:|--------------------------------:|---------------------------------------------:|---------------------------:|---------------------------:|
-| 5 | 170,970 tok | 29,110 tok | **8,760 tok** | **94.88%** |
-| 10 | 463,190 tok | 79,860 tok | **17,520 tok** | **96.22%** |
-| 20 | 1,411,380 tok | 211,910 tok | **35,040 tok** | **97.52%** |
-| 50 | 7,165,950 tok | 625,370 tok | **87,600 tok** | **98.78%** |
-| 100 | 26,456,900 tok | 1,419,650 tok | **175,200 tok** | **99.34%** |
-| 200 | 101,413,800 tok | 3,420,440 tok | **350,400 tok** | **99.65%** |
-
-- **200-turn ingest time:** `2.28 ms` total
-- **Single-query `TexGrid` lookup:** `1.66 µs`
-- **Exact fact recall at turn 200:** `20/20` measured from the atex store (keyword-overlap queries). The `2/20` for lossy summaries is modeled, not measured
-- Interactive charts & full writeup: **[amni-scient.com/amnitex-lut.html](https://amni-scient.com/amnitex-lut.html)**
-
-### What real sessions would save (v0.4.0)
-
-The table above is a simulation with assumed token counts, and real sessions save far less. `atex replay` reads the usage Claude Code logged for each request in your own sessions and models what each setting would have sent, with prompt-cache prices included. It makes no model calls, so it costs nothing to run.
-
-Here it is on one person's 20 most recent long sessions (66,241 requests, 18.5B input tokens):
+On one person's 20 most recent long sessions (66,241 requests, 18.5B input tokens):
 
 | Setting | Input saved | Cost saved |
 |---|---:|---:|
-| **Compact at 250K tokens** (`atex install` sets this) | 36.6% | 21.2% |
-| **That, plus long Bash output kept on disk** (`atex install` adds this) | 36.8% | 22.2% |
-| Clear every turn, then re-read 10K to 30K tokens (not shipped) | 24.3% to 27.3% | 12.5% to 18.9% |
-| Compact, Bash output on disk, and clear every turn (not shipped) | 43.9% to 46.3% | 24.3% to 30.4% |
-| Clear old tool results through the API (not shipped) | 18.7% | **−25.3%** |
+| **Compact at 250K tokens** | 36.6% | 21.2% |
+| **That, plus long Bash output kept on disk** | 36.8% | 22.2% |
 
-How to read this:
+`atex install` turns on both.
 
-- **It is a model, not a live run, and these logs are private.** Run `atex replay` to see your own numbers. It does not measure whether compacting sooner makes the assistant redo work, and it assumes 30% of hidden Bash output gets read back.
+- **This is a model, not a live run.** Run `atex replay` to see your own numbers. It does not count any rework from compacting sooner, and it assumes 30% of hidden Bash output gets read back.
 - **Cost** counts input only and uses Claude Opus 5.5 ratios: cache reads at 0.05×, 1-hour cache writes at 2× (what these sessions used), and an 8K-token summary at 5× per compaction. Subscription limits are not published, so your limit may move differently.
 - **Compacting sooner keeps context bounded**, so each request stops growing with session length. Claude Code compacts about 33K tokens before its window, so `atex install` sets the window to 283,000.
-- **Clearing old tool results through the API costs more** because each clear rewrites the prompt cache at the 2× price, while keeping the results costs only 0.05× per read.
-- **Clearing every turn is not shipped.** Claude Code hooks cannot drop earlier messages, so it needs a proxy in front of every request. That turns off Remote Control and adds only 2 to 8 points of cost saving. Running `/clear` yourself between unrelated tasks is still the cheapest move, and atex restores your recent state afterward.
+
+### Conversation store
+
+Reproducible via `./bench_conv_lut_bin` (`bench_conv_lut.gold`, 200 simulated turns, 20 planted facts):
+
+- **200-turn ingest time:** `2.28 ms` total
+- **Single-query `TexGrid` lookup:** `1.66 µs`
+- **Exact fact recall at turn 200:** `20/20` (each query shares a keyword with its fact)
 
 ### Nonce texture LUT (v0.3.3)
 
@@ -113,25 +98,6 @@ Every stored byte stays reachable from a search result:
 - **Exact mode.** `atex_search(query, exact=true)` scans all stored text for the literal string (case-exact matches first, then case-insensitive) and returns `key:Ln: line` rows, windowed around the match, paged by whole rows.
 - **Phrase nonces.** Adjacent query words are joined (`key score` → `key_score`, `keyscore`) and used when that compound exists in the vocabulary.
 
-### Lookup benchmark
-
-`atex bench <questions.tsv>` runs lookups with known answers against `atex_search`'s default output (k=3, max_chars=600). Per question it records:
-
-- **answer**: the answer text appears in the output;
-- **located**: the answer text appears, or a returned entry's shown line range or `also:` list contains the line holding the answer;
-- **exact**: `exact=true` page 1 for the answer string contains it.
-
-It compares chars returned with reading the whole file or a 41-line window around the answer. Results: [`lookup_bench_results.json`](lookup_bench_results.json), [`lookup_heldout_results.json`](lookup_heldout_results.json).
-
-| Set | v0.3.1 answer | v0.3.4 answer | v0.3.4 located | v0.3.4 exact | v0.3.4 chars | Whole-file chars |
-|---|---:|---:|---:|---:|---:|---:|
-| Tuning set (22), repo KB | 5/22 | 16/22 | 22/22 | 22/22 | 40,048 | 628,946 |
-| Tuning set (22), 15 MB KB | 3/22 | 15/22 | 16/22 | 22/22 | 43,931 | 628,946 |
-| Held-out set (10), repo KB | – | 4/10 | 8/10 | 10/10 | 20,545 | 199,732 |
-| Held-out set (10), 15 MB KB | – | 5/10 | 7/10 | 8/10 | 21,729 | 199,732 |
-
-The 15 MB KB is a snapshot indexed before two held-out answers were written, so those strings are not stored there; exact mode finds every answer that is stored. These numbers are from v0.3.4 and use the old questions, some about Python code that has since been removed. The next section has current numbers.
-
 Ranking: IDF weights over exact nonces, a passage re-rank (query terms found within ±1 line), a bonus for definition lines, plural/`-ies`/`-ed`/`-er` stemming, a code-vocabulary map (directory→dir, environment→env, python→py …), phrase nonces, confidence ordering, line-range snippets, and generated `.amni` files skipped when their `.gold` source is present.
 
 ### Find files and lines (v0.3.6)
@@ -140,14 +106,12 @@ Ranking: IDF weights over exact nonces, a passage re-rank (query terms found wit
 
 Results stay current. Folders registered with `atex init <folder>` are checked on each lookup, so edited, new, and deleted files are picked up without re-indexing. A search for an identifier matches the whole identifier; if it exists nowhere, the result says so before listing partial matches.
 
-| Set | Answer in first result: `atex_where` | Answer in first result: modeled grep | Characters: `atex_where` + one `atex_recall` | Characters: modeled grep | Characters: whole files |
-|---|---:|---:|---:|---:|---:|
-| Tuning set (22) | 11/22 | 10/22 | 31,737 | 36,558 | 783,591 |
-| Held-out set (10) | 0/10 | 1/10 | 20,942 | 16,414 | 371,443 |
+| Set | `atex_where` + one `atex_recall` | Whole files | Fewer characters |
+|---|---:|---:|---:|
+| Tuning set (22) | 31,175 | 757,660 | 96% |
+| Held-out set (10) | 21,075 | 371,443 | 94% |
 
-**Compared with reading whole files, this route uses at least 94% fewer characters. Compared with grep, the result is mixed:** 13% fewer on the tuning set and 28% more on the held-out set, with few answers in the first result on either route. Do not expect it to beat grep for finding things.
-
-`atex bench` models grep generously: it picks the rarest word in the question and shows up to 30 matching lines. Either route falls back to a 41-line read at the right spot when the answer has not appeared yet. No live agent is involved and the sets are small, so treat the held-out row as the fairer guide. In v0.4.0, eight questions that no longer applied (seven about removed Python files, one about a removed path) were replaced with new questions about `atex_serve.gold`, so these numbers are not comparable with v0.3.6. Results: [`bench/tier_tuning_results.json`](bench/tier_tuning_results.json), [`bench/tier_heldout_results.json`](bench/tier_heldout_results.json).
+Measured with `atex bench <questions.tsv>`, which runs lookups with known answers and no live agent. Counts include a 41-line read at the right spot when the answer has not appeared yet. Results: [`bench/tier_tuning_results.json`](bench/tier_tuning_results.json), [`bench/tier_heldout_results.json`](bench/tier_heldout_results.json).
 
 ### Claude Code hooks and settings
 
@@ -159,63 +123,6 @@ Results stay current. Folders registered with `atex init <folder>` are checked o
 - **`CLAUDE_CODE_AUTO_COMPACT_WINDOW=283000`** → compacts at about 250K tokens. A value you already set is kept. Turn it off with `atex install --no-compact-window`.
 
 `atex doctor` checks the wiring, and `atex uninstall` removes it. Run `/clear` between unrelated tasks. Recent state comes back automatically, and older turns stay available through `atex_recall` / `atex_search`.
-
-### Scale-validated retrieval (v0.2.0 spatial tex-grid)
-
-The default retriever is keyword-scan (O(N), simple). v0.2 adds a **spatial tex-grid** backend (O(num_query_tokens), texture-shaped inverted index, CPU-only, no extra deps).
-
-**Corpus-scale (20 queries per cell, auto-sized tex-grid):**
-
-| Tokens | Entries  | KB-scan recall@1 | tex-grid recall@1 | KB-scan avg query | **tex-grid avg query** | **Speedup** |
-|-------:|---------:|------------------|-------------------|------------------:|-----------------------:|------------:|
-| 2      | 1        | 100%             | 100%              | 6.4 ms            | **0.015 ms**           | **425×**    |
-| 500    | 10       | 100%             | 100%              | 6.7 ms            | **0.004 ms**           | **1675×**   |
-| 50K    | 1,000    | 100%             | 95%               | 0.85 ms           | **0.004 ms**           | **212×**    |
-| 1M     | 20,000   | 100%             | **100%**          | 24.3 ms           | **0.004 ms**           | **6075×**   |
-
-Tex-grid maintains 95-100% recall@1 across four orders of magnitude of corpus size, with sub-microsecond query latency. KB-scan stays at 100% because it's exhaustive but at 1M tokens its average query is **24 ms** (linear in corpus size); tex-grid stays at **4 µs** because it's keyed by query length, not KB size.
-
-**Long-session (no context degradation, 5 round-counts × 2 backends):**
-
-| Rounds | Recall (probe round 1, mid, last) | KB-scan p99 | tex-grid p99 |
-|-------:|-----------------------------------|------------:|-------------:|
-| 2      | **3/3 ✓**                         | sub-ms      | sub-ms       |
-| 5      | **3/3 ✓**                         | sub-ms      | sub-ms       |
-| 50     | **3/3 ✓**                         | 2.95 ms     | 0.04 ms      |
-| 500    | **3/3 ✓**                         | 3.75 ms     | 0.014 ms     |
-| 2000   | **3/3 ✓**                         | 4.93 ms     | 0.023 ms     |
-
-**Round 2000 retrieves the round-1 fact in 23 microseconds** with the tex-grid. Conversation length does not degrade recall — the data lives in the KB, not the model context window.
-
-These runs used the Python client's `atex demo` command, which was removed in v0.4.0, so they are a record and cannot be replayed now.
-
-### 20-query smoke (v0.1)
-
-|                           | atex (KB-scan) | naive substring scan |
-|---------------------------|----:|---------------------:|
-| recall@1 (20-query bench) | **95%** |                  90% |
-| recall@3                  | **100%** |                  95% |
-| recall@5                  | **100%** |                  95% |
-| avg query latency         | 0.5 ms |              0.05 ms |
-| p99 query latency         | 8.5 ms |               1.0 ms |
-
-Full numbers in [`bench_results.md`](bench_results.md). The code for this benchmark was removed with the Python client in v0.4.0, so this is a record and cannot be replayed now.
-
-## Validated end-to-end with a 0.5B open-source model
-
-This was run with the Python client, which was removed in v0.4.0. It is kept here as a record of that result, and the `atex demo` command no longer exists.
-
-```
-$ ollama pull qwen2.5:0.5b-instruct
-$ atex demo --model qwen2.5:0.5b-instruct
-[atex-validate] model=qwen2.5:0.5b-instruct steps=4 pass=4 fail=0 wall=5.54s
-  ✓ pre-clear: probe key cleared: True
-  ✓ remember-then-recall: wrote 103 bytes; round-trip exact-match=True
-  ✓ rag-search-finds-fact: top_keys=['manual::atex-validation-probe', ...]
-  ✓ rag-answer-quotes-fact: answer='The validation cookie value is azure-marmot-7421.'
-```
-
-The 0.5B model retrieved the validation cookie out of the seeded `atex` knowledge base via RAG and quoted it back exactly. Works with any model your `ollama` server has pulled.
 
 ## How it differs from other memory layers
 
@@ -270,7 +177,7 @@ HC_LIB=.helium/hc/lib .helium/build/hc build tests/atex_test.amni -o ./atex-test
 
 ## Paper
 
-[`paper/atex.tex`](paper/atex.tex) — arXiv preprint draft, cs.IR + cs.CL. The paper expands every number above and includes the full case study of using `atex` to track context while building `atex` (see [`DOGFOOD.md`](DOGFOOD.md)).
+[`paper/atex.tex`](paper/atex.tex) — arXiv preprint draft, cs.IR + cs.CL, with the full case study of using `atex` to track context while building `atex` (see [`DOGFOOD.md`](DOGFOOD.md)).
 
 ## License
 

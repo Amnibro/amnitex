@@ -1432,7 +1432,7 @@ fn run_doctor() {
 	var hm byte[>..] = [];
 	env("HOME", hm);
 	var fails = 0;
-	write_stdout("atex 0.4.1 (gold/helium-native)\n");
+	write_stdout("atex 0.4.2 (gold/helium-native)\n");
 	if is_dir(str(hm, "/.claude")) {
 		var raw byte[>..] = [];
 		read_file(str(hm, "/.claude/settings.json"), raw);
@@ -2662,7 +2662,7 @@ fn run_bench(tsv const byte[:]) {
 		rows.append("}");
 	}
 	var out byte[>..] = [];
-	out.append("{\"engine\":\"atex 0.4.1\",\"k\":");
+	out.append("{\"engine\":\"atex 0.4.2\",\"k\":");
 	format(out, DEF_K);
 	out.append(",\"max_chars\":");
 	format(out, DEF_MC);
@@ -2951,11 +2951,11 @@ fn main() {
 	while i < av.len {
 		let a = av[i];
 		if a == "--version" || a == "-v" {
-			write_stdout("atex 0.4.1 (gold/helium-native)\n");
+			write_stdout("atex 0.4.2 (gold/helium-native)\n");
 			flush_stdout();
 			return;
 		} else if a == "--help" || a == "-h" || a == "help" {
-			write_stdout("atex 0.4.1 (gold/helium-native)\nUsage:\n  atex [serve] [--atex-dir <dir>]     Run MCP stdio server\n  atex init [project_dir] [--atex-dir <dir>]  Index project docs & code into KB\n  atex install [--atex-dir <dir>] [--no-compact-window]  Wire Claude Code, Cursor, Windsurf, Gemini, Codex, Grok\n  atex uninstall                      Remove the wiring; knowledge bases stay\n  atex doctor                         Check the wiring\n  atex replay [projects_dir]          Model what each setting would have saved on your own Claude Code sessions\n  atex stats [--atex-dir <dir>]       Print knowledge base statistics\n  atex bench <questions.tsv>          Measure answer recall and output size vs whole-file reads\n  atex --selftest                     Run end-to-end TexGrid & byte-page self-test\n");
+			write_stdout("atex 0.4.2 (gold/helium-native)\nUsage:\n  atex [serve] [--atex-dir <dir>]     Run MCP stdio server\n  atex init [project_dir] [--atex-dir <dir>]  Index project docs & code into KB\n  atex install [--atex-dir <dir>] [--no-compact-window]  Wire Claude Code, Cursor, Windsurf, Gemini, Codex, Grok\n  atex uninstall                      Remove the wiring; knowledge bases stay\n  atex doctor                         Check the wiring\n  atex replay [projects_dir]          Model what each setting would have saved on your own Claude Code sessions\n  atex stats [--atex-dir <dir>]       Print knowledge base statistics\n  atex bench <questions.tsv>          Measure answer recall and output size vs whole-file reads\n  atex --selftest                     Run end-to-end TexGrid & byte-page self-test\n");
 			flush_stdout();
 			return;
 		} else if a == "--selftest" || a == "selftest" {
@@ -3020,14 +3020,14 @@ fn main() {
 			var out byte[>..] = [];
 			out.append("{\"jsonrpc\":\"2.0\",");
 			write_id(out, d, id_node);
-			out.append(",\"result\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"atex-gold\",\"version\":\"0.4.1\"}}}\n");
+			out.append(",\"result\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"atex-gold\",\"version\":\"0.4.2\"}}}\n");
 			write_stdout(out[..]);
 			flush_stdout();
 		} else if m == "tools/list" {
 			var out byte[>..] = [];
 			out.append("{\"jsonrpc\":\"2.0\",");
 			write_id(out, d, id_node);
-			out.append(",\"result\":{\"tools\":[{\"name\":\"atex_search\",\"description\":\"Keyword search over the local atex knowledge base. Returns each matching key with a line range, the best-matching lines, and an also: list of every other matching line number. A footer enumerates all remaining matching keys; pass page=N for the next set. exact=true scans all stored text for a literal case-insensitive string and returns key:line rows. Try it before reading whole files.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\",\"description\":\"Search keywords\"},\"k\":{\"type\":\"integer\",\"default\":3},\"max_chars\":{\"type\":\"integer\",\"default\":600},\"page\":{\"type\":\"integer\",\"default\":1},\"exact\":{\"type\":\"boolean\",\"default\":false}},\"required\":[\"query\"]}},{\"name\":\"atex_where\",\"description\":\"Find which files hold something. Call this first instead of grep: it returns ranked file keys with matching line numbers and one best line each, always current with the files on disk. Follow up with atex_recall(key, query) for just the matching lines in one file.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\"},\"k\":{\"type\":\"integer\",\"default\":3},\"path\":{\"type\":\"string\",\"description\":\"Only files under this folder\"}},\"required\":[\"query\"]}},{\"name\":\"atex_recall\",\"description\":\"Exact-key lookup in the atex knowledge base. Returns the stored text, or the line range given by lines=a-b (as shown by atex_search). Truncated output names the exact remaining line range.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"key\":{\"type\":\"string\"},\"max_chars\":{\"type\":\"integer\",\"default\":2400},\"lines\":{\"type\":\"string\",\"description\":\"Line range a-b\"},\"query\":{\"type\":\"string\",\"description\":\"Return only the lines in this entry that match\"}},\"required\":[\"key\"]}},{\"name\":\"atex_remember\",\"description\":\"Persist a learned fact to the atex knowledge base under namespace manual::.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"key\":{\"type\":\"string\"},\"text\":{\"type\":\"string\"}},\"required\":[\"key\",\"text\"]}},{\"name\":\"atex_list_keys\",\"description\":\"List keys in the atex KB matching a prefix.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"prefix\":{\"type\":\"string\",\"default\":\"\"},\"max\":{\"type\":\"integer\",\"default\":50}}}},{\"name\":\"atex_stats\",\"description\":\"Get atex KB statistics and unbiased context tracker report path for the current conversation.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{}}}]}}\n");
+			out.append(",\"result\":{\"tools\":[{\"name\":\"atex_search\",\"description\":\"Keyword search over the local atex knowledge base. Returns each matching key with a line range, the best-matching lines, and an also: list of every other matching line number. A footer enumerates all remaining matching keys; pass page=N for the next set. exact=true scans all stored text for a literal case-insensitive string and returns key:line rows. Try it before reading whole files.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\",\"description\":\"Search keywords\"},\"k\":{\"type\":\"integer\",\"default\":3},\"max_chars\":{\"type\":\"integer\",\"default\":600},\"page\":{\"type\":\"integer\",\"default\":1},\"exact\":{\"type\":\"boolean\",\"default\":false}},\"required\":[\"query\"]}},{\"name\":\"atex_where\",\"description\":\"Find which files hold something. Call this before reading whole files: it returns ranked file keys with matching line numbers and one best line each, always current with the files on disk. Follow up with atex_recall(key, query) for just the matching lines in one file.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\"},\"k\":{\"type\":\"integer\",\"default\":3},\"path\":{\"type\":\"string\",\"description\":\"Only files under this folder\"}},\"required\":[\"query\"]}},{\"name\":\"atex_recall\",\"description\":\"Exact-key lookup in the atex knowledge base. Returns the stored text, or the line range given by lines=a-b (as shown by atex_search). Truncated output names the exact remaining line range.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"key\":{\"type\":\"string\"},\"max_chars\":{\"type\":\"integer\",\"default\":2400},\"lines\":{\"type\":\"string\",\"description\":\"Line range a-b\"},\"query\":{\"type\":\"string\",\"description\":\"Return only the lines in this entry that match\"}},\"required\":[\"key\"]}},{\"name\":\"atex_remember\",\"description\":\"Persist a learned fact to the atex knowledge base under namespace manual::.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"key\":{\"type\":\"string\"},\"text\":{\"type\":\"string\"}},\"required\":[\"key\",\"text\"]}},{\"name\":\"atex_list_keys\",\"description\":\"List keys in the atex KB matching a prefix.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"prefix\":{\"type\":\"string\",\"default\":\"\"},\"max\":{\"type\":\"integer\",\"default\":50}}}},{\"name\":\"atex_stats\",\"description\":\"Get atex KB statistics and unbiased context tracker report path for the current conversation.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{}}}]}}\n");
 			write_stdout(out[..]);
 			flush_stdout();
 		} else if m == "ping" {

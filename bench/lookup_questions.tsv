@@ -12,7 +12,7 @@ backup file written before editing client config	.atex-backup	atex_serve.gold
 claude desktop config path on macOS	Library/Application Support/Claude	atex_serve.gold
 one line install command curl	curl -fsSL https://amni-scient.com/atex-install.sh	README.md
 grok plugin install trust	grok plugin install Amnibro/amnitex --trust	README.md
-is the lossy summary recall measured or modeled	modeled rule	README.md
+flag that turns off the compact window	--no-compact-window	README.md
 tokens assumed per raw turn in the conversation benchmark	raw_turn_tok	bench_conv_lut.gold
 backoff interval for rpc_reconnect_loop	RETRY_BACKOFF_17MS	bench_conv_lut.gold
 supervisor angel heartbeat health pulses	CRON_HEARTBEAT_SEC_45	bench_conv_lut.gold

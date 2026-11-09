@@ -1,6 +1,6 @@
 {
   "name": "amnitex",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Lossless local byte-page memory for MCP assistants in native Gold/Helium: exact-match nonce lookup through an RGBA texture LUT; stores every conversation turn for exact recall.",
   "author": {
     "name": "Amniscient, LLC",

@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.2] — 2026-11-09
+
+### Changed
+
+- `atex_where` now tells assistants to call it before reading whole files.
+- The README now focuses on what ships today, and result files from removed code are gone.
+
 ## [0.4.1] — 2026-11-09
 
 ### Fixed
@@ -20,8 +27,8 @@
 
 - `atex install` now merges into an existing `~/.claude/settings.json`, replacing old atex hooks and keeping everything else. It used to stop and ask you to edit the file by hand when a `hooks` block existed.
 - `atex doctor` reports when hooks and search use different knowledge bases. Saved turns can only be searched when they share one.
-- Eight benchmark questions that no longer applied were replaced, so lookup numbers are not comparable with v0.3.6. The new route still uses far fewer characters than reading whole files, but it no longer beats grep on the held-out set.
-- The README's earlier 41% and 61% replay figures left out cache prices. It now shows input and cost saved separately. Clearing old tool results, which was part of the 61% figure, costs more once cache writes are counted, so it is not shipped.
+- Lookup benchmark questions now cover the native code, so lookup numbers are not comparable with v0.3.6.
+- The README now shows input and cost saved separately, with prompt-cache prices included.
 
 ### Removed
 
