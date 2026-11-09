@@ -147,7 +147,7 @@ Results stay current. Folders registered with `atex init <folder>` are checked o
 
 **Compared with reading whole files, this route uses about 94% fewer characters. Compared with grep, the result is mixed:** 13% fewer on the tuning set and 27% more on the held-out set, with few answers in the first result on either route. Do not expect it to beat grep for finding things.
 
-`atex bench` models grep generously: it picks the rarest word in the question and shows up to 30 matching lines. Either route falls back to a 41-line read at the right spot when the answer has not appeared yet. No live agent is involved and the sets are small, so treat the held-out row as the fairer guide. In v0.4.0, six questions about the removed Python code were replaced with new questions about `atex_serve.gold`, so these numbers are not comparable with v0.3.6. Results: [`bench/tier_tuning_results.json`](bench/tier_tuning_results.json), [`bench/tier_heldout_results.json`](bench/tier_heldout_results.json).
+`atex bench` models grep generously: it picks the rarest word in the question and shows up to 30 matching lines. Either route falls back to a 41-line read at the right spot when the answer has not appeared yet. No live agent is involved and the sets are small, so treat the held-out row as the fairer guide. In v0.4.0, eight questions that no longer applied (seven about removed Python files, one about a removed path) were replaced with new questions about `atex_serve.gold`, so these numbers are not comparable with v0.3.6. Results: [`bench/tier_tuning_results.json`](bench/tier_tuning_results.json), [`bench/tier_heldout_results.json`](bench/tier_heldout_results.json).
 
 ### Claude Code hooks and settings
 
