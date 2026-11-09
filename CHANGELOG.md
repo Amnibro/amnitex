@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.4.6] — 2026-11-09
+
+### Added
+
+- The SessionStart hook now asks the assistant to group its tool calls, in every Claude Code session. Each reply re-reads the whole context, so edits, the command that checks them and the next reads go in one reply. A step that must not follow a failure, such as a commit or a push, stays behind `&&` or waits for a later reply. Set `ATEX_TIP=0` to turn this off. Run `atex install` again to get it; the plugin's `hooks/hooks.json` already has it.
+- `atex run` gives its agent the same instruction.
+- `atex run --check "<command>"` takes a command that exits 0 when the work is right. atex runs it after every reply that edits a file and shows the agent the result. When the agent reports the task done and the check fails, the agent gets up to two more rounds to fix it, and after that the run stops with exit code 4. `ATEX_CHECK_SECS` sets the time limit (270 seconds by default).
+- `atex replay` prints `one_call_replies` and `one_call_input`: of the requests that follow tool calls, the share that follow just one, counted in requests and in input tokens.
+
+### Changed
+
+- `atex doctor` reports when the SessionStart hook still runs only after `/clear` and compaction, and asks for `atex install`.
+
+### Fixed
+
+- `atex run` now rounds its API price to the nearest cent. It used to round down.
+
 ## [0.4.5] — 2026-11-09
 
 ### Changed

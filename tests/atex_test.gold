@@ -166,6 +166,26 @@ fn test_shared() {
 	var turns = 0;
 	for ln in split(ks[..], '\n') { if has(ln, "turn_") && !has(ln, "latest") { turns += 1; } }
 	check("seven concurrent stop hooks all save", turns == 7);
+	let sj = str(root, "/sj");
+	let so = str(root, "/so");
+	let st = str(quote(BIN[..]), " hook start --atex-dir ", quote(kb[..]), " < ", quote(sj[..]), " > ", quote(so[..]), " 2>/dev/null");
+	write_file(sj[..], "{\"source\":\"startup\",\"cwd\":\"/proj/shared\"}");
+	run_command(st[..]);
+	let s0 = slurp(so[..]);
+	var sd = json::Doc {};
+	let sr, _ = json::parse(s0[..], sd);
+	let tip, _ = json::as_string(sd, json::member(sd, json::member(sd, sr, "hookSpecificOutput"), "additionalContext"));
+	check("a new session is asked to group tool calls", has(s0[..], "\"hookEventName\":\"SessionStart\"") && find(tip, "[atex] Every reply") == 0 && has(tip, "as few replies") && has(tip, "behind && in the same command") && !has(tip, "Restored working state"));
+	run_command(str("ATEX_TIP=0 ", st)[..]);
+	check("ATEX_TIP=0 turns that off", slurp(so[..]).len == 0);
+	write_file(sj[..], "{\"source\":\"compact\",\"cwd\":\"/proj/shared\"}");
+	run_command(st[..]);
+	check("after compaction the saved state comes back with it", has(slurp(so[..])[..], "Restored working state") && has(slurp(so[..])[..], "\\n[atex] Every reply"));
+	run_command(str("ATEX_TIP=0 ", st)[..]);
+	check("the saved state comes back without it too", has(slurp(so[..])[..], "Restored working state") && !has(slurp(so[..])[..], "as few replies"));
+	write_file(sj[..], "{\"source\":\"resume\",\"cwd\":\"/proj/shared\"}");
+	run_command(st[..]);
+	check("a resumed session gets no saved state", has(slurp(so[..])[..], "as few replies") && !has(slurp(so[..])[..], "Restored working state"));
 	let two = rpc(kb[..], str(call_line(1, "atex_remember", "{\"key\":\"foo\",\"text\":\"first zebra fact\"}"), call_line(2, "atex_search", "{\"query\":\"zebra\"}"), call_line(3, "atex_remember", "{\"key\":\"foo\",\"text\":\"second giraffe note\"}"), call_line(4, "atex_search", "{\"query\":\"zebra\"}"))[..]);
 	check("search forgets overwritten text", two.len == 4 && !has(two[3][..], "giraffe"));
 	mkdirs(str(kb, "/write.lock")[..]);
@@ -246,6 +266,8 @@ fn test_install() {
 	put(str(hm, "/.claude.json")[..], "{\"mcpServers\":{\"other\":{\"command\":\"x\"}},\"numStartups\":7}\n");
 	mkdirs(str(hm, "/.cursor")[..]);
 	let ins = str("install --atex-dir ", quote(kb[..]));
+	at_home(hm[..], "doctor");
+	check("doctor asks for a new install while the start hook has its old matcher", has(slurp(str(T, "/last")[..])[..], "ok hook that restores state") && has(slurp(str(T, "/last")[..])[..], "missing that hook runs in every session"));
 	check("install succeeds", at_home(hm[..], ins[..]) == 0);
 	let s1 = slurp(set[..]);
 	var d = json::Doc {};
@@ -255,6 +277,7 @@ fn test_install() {
 	check("the compact window is set", w == "283000");
 	check("unrelated settings survive", has(s1[..], "KEEP_ME") && has(s1[..], "other-tool done") && has(s1[..], "lint-it") && has(s1[..], "Bash(ls:*)") && has(s1[..], "\"model\""));
 	check("old atex hooks are replaced", !has(s1[..], "/old/kb") && has(s1[..], " hook stop --atex-dir") && has(s1[..], " hook start --atex-dir") && has(s1[..], " hook tool --atex-dir"));
+	check("the start hook runs in every session", !has(s1[..], "clear|compact"));
 	check("doctor passes", at_home(hm[..], "doctor") == 0);
 	check("doctor reports one knowledge base", has(slurp(str(T, "/last")[..])[..], "ok one knowledge base"));
 	at_home(hm[..], ins[..]);
@@ -288,7 +311,7 @@ fn test_replay() {
 		t.append(str("{\"type\":\"assistant\",\"message\":{\"id\":\"m", i, "\",\"usage\":{\"input_tokens\":1,\"cache_read_input_tokens\":", ctx, ",\"cache_creation_input_tokens\":0,\"output_tokens\":7},\"content\":[{\"type\":\"tool_use\",\"id\":\"t", i, "\",\"name\":\"Bash\",\"input\":{\"command\":\"x\"}}]}}\n")[..]);
 		var body byte[>..] = [];
 		body.resize(20000, 'x');
-		t.append(str("{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"t", i, "\",\"content\":\"", body, "\"}]}}\n")[..]);
+		t.append(str("{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"t", i, "\",\"content\":\"", body, "\"}", if i % 4 == 0 { ",{\"type\":\"tool_result\",\"tool_use_id\":\"u\",\"content\":\"y\"}" } else { "" }, "]}}\n")[..]);
 		ctx += 7000;
 	}
 	write_file(str(dir, "/s.jsonl")[..], t[..]);
@@ -297,12 +320,13 @@ fn test_replay() {
 	check("replay runs", at_home(hm[..], str("replay ", quote(str(root, "/projects")))[..]) == 0);
 	let o = slurp(str(T, "/last")[..]);
 	check("replay finds the session", has(o[..], "sessions=1") && has(o[..], "calls=400"));
+	check("replay counts replies that follow one tool call", has(o[..], "one_call_replies=74.9%"));
 	check("replay lists the settings", has(o[..], "compact at 250K") && has(o[..], "cap Bash 2K") && has(o[..], "fresh turn"));
 	check("replay creates no knowledge base", !is_dir(str(hm, "/.atex")));
 	check("replay reports a missing folder", at_home(hm[..], str("replay ", quote(str(root, "/nope")))[..]) != 0);
 }
 fn run_call(id const byte[:], ctx int) byte[>..] { str("{\"type\":\"assistant\",\"message\":{\"id\":", js(id), ",\"content\":[],\"usage\":{\"input_tokens\":", ctx, ",\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0,\"output_tokens\":5}}}\n") }
-fn run_end_line(sub const byte[:], bad const byte[:], why const byte[:], text const byte[:]) byte[>..] { str("{\"type\":\"result\",\"subtype\":", js(sub), ",\"is_error\":", bad, ",\"terminal_reason\":", js(why), ",\"session_id\":\"sid-1\",\"result\":", js(text), ",\"total_cost_usd\":0.25,\"permission_denials\":[{\"tool_name\":\"Bash\"}],\"usage\":{\"input_tokens\":1000,\"cache_read_input_tokens\":2000,\"cache_creation_input_tokens\":3000,\"output_tokens\":40}}\n") }
+fn run_end_line(sub const byte[:], bad const byte[:], why const byte[:], text const byte[:]) byte[>..] { str("{\"type\":\"result\",\"subtype\":", js(sub), ",\"is_error\":", bad, ",\"terminal_reason\":", js(why), ",\"session_id\":\"sid-1\",\"result\":", js(text), ",\"total_cost_usd\":0.248,\"permission_denials\":[{\"tool_name\":\"Bash\"}],\"usage\":{\"input_tokens\":1000,\"cache_read_input_tokens\":2000,\"cache_creation_input_tokens\":3000,\"output_tokens\":40}}\n") }
 fn run_fake(root const byte[:], replies const byte[>..][:]) {
 	run_command(str("rm -rf ", quote(root))[..]);
 	mkdirs(str(root, "/bin")[..]);
@@ -339,10 +363,7 @@ fn test_run() {
 	check("run adds up every call", has(se[..], "2 parts, 5 calls. Input 18K (6K from cache, 12K new), output 0K, API price $0.50."));
 	check("run makes no savings claim it did not measure", !has(se[..], "modeled") && !has(se[..], "% less"));
 	check("run says when tools were refused", has(se[..], "3 tool calls were refused") && has(se[..], "--allow-all"));
-	var names byte[>..] = [];
-	list_dir(str(root, "/kb/runs")[..], names);
-	var rid byte[>..] = [];
-	for nm in split(names[..], '\n') { if nm.len > 0 && nm[0] != '.' { rid = str(nm); } }
+	let rid = run_id(root[..]);
 	let rd = str(root, "/kb/runs/", rid);
 	check("raw logs stay out of git", slurp(str(root, "/kb/runs/.gitignore")[..]) == "*\n");
 	check("run keeps the logs and notes on disk", has(slurp(str(rd, "/part-1.notes.txt")[..])[..], "next step") && file_exists(str(rd, "/part-1.jsonl")[..]) && file_exists(str(rd, "/part-1.notes.jsonl")[..]));
@@ -410,6 +431,120 @@ fn test_run() {
 	check("capping alone still works", r2 >= 0 && json::member(d2, r2, "continue") < 0 && json::member(d2, r2, "hookSpecificOutput") >= 0);
 }
 fn fn_hook_cmd(i const byte[:], o const byte[:]) byte[>..] { str(quote(BIN[..]), " hook tool < ", quote(i), " > ", quote(o)) }
+fn run_id(root const byte[:]) byte[>..] {
+	var names byte[>..] = [];
+	list_dir(str(root, "/kb/runs")[..], names);
+	var rid byte[>..] = [];
+	for nm in split(names[..], '\n') { if nm.len > 0 && nm[0] != '.' { rid = str(nm); } }
+	rid
+}
+fn batch_in(tp const byte[:], calls const byte[:]) byte[>..] { str("{\"session_id\":\"s\",\"transcript_path\":", js(tp), ",\"hook_event_name\":\"PostToolBatch\",\"tool_calls\":[", calls, "]}") }
+fn test_check() {
+	let root = str(T, "/chk");
+	let fr = str(T, "/chkrun");
+	let rd = str(root, "/kb/runs/r1");
+	let chk = str(root, "/chk.sh");
+	let tp = str(root, "/s.jsonl");
+	let hi = str(root, "/in");
+	let ho = str(root, "/out");
+	mkdirs(rd[..]);
+	mkdirs(str(root, "/proj")[..]);
+	write_file(chk[..], "#!/bin/sh\nd=$(dirname \"$0\")\nn=$(cat \"$d/cn\" 2>/dev/null || echo 0)\nn=$((n+1))\necho $n > \"$d/cn\"\npwd\ncat \"$d/say\" 2>/dev/null\n[ $n -ge $(cat \"$d/need\") ]\n");
+	make_exec(chk[..]);
+	write_file(str(root, "/need")[..], "99\n");
+	write_file(str(root, "/say")[..], "FAIL thing\n");
+	write_file(str(rd, "/check.cmd")[..], str(chk, "\n")[..]);
+	write_file(str(rd, "/pwd.txt")[..], str(root, "/proj\n")[..]);
+	write_file(tp[..], str(run_call("m1", 5000), run_call("m2", 12000))[..]);
+	let edit = "{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"/x\"},\"tool_use_id\":\"t1\",\"tool_response\":\"ok\"}";
+	let read = "{\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\"/x\"},\"tool_use_id\":\"t2\",\"tool_response\":\"x\"}";
+	let own = str("{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":", js(str(chk, " 2>&1 | tail -n 3")[..]), "},\"tool_use_id\":\"t3\",\"tool_response\":\"x\"}");
+	let hook = str("ATEX_RUN_DIR=", quote(rd[..]), " ", fn_hook_cmd(hi[..], ho[..]));
+	write_file(hi[..], batch_in(tp[..], str(edit, ",", read)[..])[..]);
+	run_command(str("ATEX_RUN_CUT=7001 ", hook)[..]);
+	var d = json::Doc {};
+	let r, _ = json::parse(slurp(ho[..])[..], d);
+	let hs = json::member(d, r, "hookSpecificOutput");
+	let ev, _ = json::as_string(d, json::member(d, hs, "hookEventName"));
+	let ctx, _ = json::as_string(d, json::member(d, hs, "additionalContext"));
+	check("an edit makes atex run the check and show the result", ev == "PostToolBatch" && has(ctx, "gave exit code 1") && has(ctx, "FAIL thing") && json::member(d, r, "continue") < 0);
+	check("the check runs in the folder the run started in", has(ctx, str(root, "/proj")[..]));
+	check("the check hook leaves a marker for the cut", file_exists(str(rd, "/batch.ok")[..]));
+	write_file(hi[..], batch_in(tp[..], read)[..]);
+	run_command(str("ATEX_RUN_CUT=7001 ", hook)[..]);
+	check("a reply with no edits runs no check", slurp(ho[..]).len == 0 && slurp(str(root, "/cn")[..]) == "1\n");
+	write_file(hi[..], batch_in(tp[..], str(edit, ",", own)[..])[..]);
+	run_command(str("ATEX_RUN_CUT=7001 ", hook)[..]);
+	check("a check the agent ran after its edits is not run twice", slurp(ho[..]).len == 0 && slurp(str(root, "/cn")[..]) == "1\n");
+	write_file(hi[..], batch_in(tp[..], str(own, ",", edit)[..])[..]);
+	run_command(str("ATEX_RUN_CUT=7001 ", hook)[..]);
+	check("an edit after the agent's own check is checked", has(slurp(ho[..])[..], "gave exit code 1") && slurp(str(root, "/cn")[..]) == "2\n");
+	write_file(hi[..], batch_in(tp[..], edit)[..]);
+	run_command(str("ATEX_RUN_CUT=7000 ", hook)[..]);
+	check("the check hook can cut and report in one reply", has(slurp(ho[..])[..], "\"continue\":false") && has(slurp(ho[..])[..], "additionalContext"));
+	write_file(str(root, "/need")[..], "1\n");
+	write_file(str(root, "/say")[..], "all 12 passed\n");
+	run_command(str("ATEX_RUN_CUT=7001 ", hook)[..]);
+	check("a passing check shows its last lines", has(slurp(ho[..])[..], "gave exit code 0") && has(slurp(ho[..])[..], "all 12 passed"));
+	var big byte[>..] = [];
+	for i in 1..3001 { big.append(str("line ", i, "\n")[..]); }
+	write_file(str(root, "/say")[..], big[..]);
+	write_file(str(root, "/need")[..], "99\n");
+	run_command(str("ATEX_RUN_CUT=7001 ", hook)[..]);
+	check("long check output is cut down and kept in a file", slurp(ho[..]).len > 0 && slurp(ho[..]).len < 2400 && has(slurp(ho[..])[..], "Full output") && has(slurp(str(rd, "/check.txt")[..])[..], "line 1500\n"));
+	write_file(hi[..], str("{\"session_id\":\"s\",\"transcript_path\":", js(tp[..]), ",\"tool_name\":\"Read\",\"tool_use_id\":\"t\",\"tool_input\":{},\"tool_response\":{}}")[..]);
+	run_command(str("ATEX_RUN_CUT=7000 ", hook)[..]);
+	check("with the check hook working, the per-tool hook leaves the cut to it", slurp(ho[..]).len == 0);
+	delete_file(str(rd, "/batch.ok")[..]);
+	run_command(str("ATEX_RUN_CUT=7000 ", hook)[..]);
+	check("without it, the per-tool hook still cuts", has(slurp(ho[..])[..], "\"continue\":false"));
+	write_file(str(rd, "/check.cmd")[..], "sleep 5\n");
+	write_file(hi[..], batch_in(tp[..], edit)[..]);
+	run_command(str("ATEX_CHECK_SECS=1 ATEX_RUN_CUT=7001 ", hook)[..]);
+	check("a check that hangs is stopped", run_command("command -v timeout > /dev/null 2>&1") != 0 || has(slurp(ho[..])[..], "did not finish in 1 s"));
+	let opt = str("--check ", quote(chk[..]), " task");
+	var rs byte[>..][>..] = [];
+	rs.push(str(run_call("m1", 5000), run_call("m2", 7000), run_end_line("success", "false", "completed", "all done")));
+	rs.push(str(run_call("m3", 8000), run_end_line("success", "false", "completed", "fixed it")));
+	run_fake(fr[..], rs[..]);
+	delete_file(str(root, "/cn")[..]);
+	write_file(str(root, "/need")[..], "2\n");
+	write_file(str(root, "/say")[..], "FAIL widget\n");
+	check("a failing check sends the agent back to fix it", run_go(fr[..], opt[..]) == 0 && slurp(str(fr, "/so")[..]) == "fixed it\n");
+	let in2 = slurp(str(fr, "/in.2")[..]);
+	check("the fix round resumes the same session with the failure", has(slurp(str(fr, "/args.2")[..])[..], "--resume sid-1") && has(slurp(str(fr, "/args.2")[..])[..], "--max-turns 133") && has(in2[..], "FAIL widget") && has(in2[..], "gave exit code 1"));
+	let se = slurp(str(fr, "/se")[..]);
+	check("run says the check passed and counts the fix round", has(se[..], str("Check passed: ", chk)[..]) && has(se[..], "Part 1, fix 1: 1 calls") && has(se[..], "1 part, 3 calls. Input 12K (4K from cache, 8K new), output 0K, API price $0.25."));
+	check("run says when the check hook never ran", has(se[..], "did not run the check after edits"));
+	let cfg = slurp(str(fr, "/kb/runs/", run_id(fr[..]), "/settings.json")[..]);
+	var dc = json::Doc {};
+	let rc, _ = json::parse(trim(cfg[..]), dc);
+	check("--check wires the check hook", rc >= 0 && json::count(dc, json::member(dc, json::member(dc, rc, "hooks"), "PostToolBatch")) == 1 && has(cfg[..], "ATEX_RUN_DIR=") && has(cfg[..], "\"timeout\":300") && has(cfg[..], "\"matcher\":\"\""));
+	check("--check tells the agent about the check", has(slurp(str(fr, "/kb/runs/", run_id(fr[..]), "/system.txt")[..])[..], str("Check command: ", chk)[..]));
+	rs.clear();
+	rs.push(str(run_call("m1", 5000), run_end_line("success", "false", "completed", "all done")));
+	rs.push(str(run_call("m2", 5000), run_end_line("success", "false", "completed", "try 1")));
+	rs.push(str(run_call("m3", 5000), run_end_line("success", "false", "completed", "try 2")));
+	run_fake(fr[..], rs[..]);
+	write_file(str(root, "/need")[..], "99\n");
+	check("a check that keeps failing ends the run with its own exit code", run_go(fr[..], opt[..]) == 4 && !file_exists(str(fr, "/args.4")[..]) && has(slurp(str(fr, "/se")[..])[..], "still fails after 2 fix rounds") && slurp(str(fr, "/so")[..]) == "try 2\n");
+	rs.clear();
+	rs.push(str(run_call("m1", 5000), run_end_line("success", "false", "hook_stopped", "")));
+	rs.push(run_end_line("success", "false", "completed", "DONE\nall of it works"));
+	rs.push(str(run_call("m2", 5000), run_end_line("success", "false", "completed", "now it works")));
+	run_fake(fr[..], rs[..]);
+	delete_file(str(root, "/cn")[..]);
+	write_file(str(root, "/need")[..], "2\n");
+	check("notes that say done are checked before the run ends", run_go(fr[..], opt[..]) == 0 && has(slurp(str(fr, "/in.3")[..])[..], "the check fails") && has(slurp(str(fr, "/in.3")[..])[..], "all of it works") && slurp(str(fr, "/so")[..]) == "now it works\n");
+	rs.clear();
+	rs.push(str(run_call("m1", 5000), run_end_line("success", "false", "completed", "plain")));
+	run_fake(fr[..], rs[..]);
+	write_file(str(root, "/need")[..], "1\n");
+	check("a passing check ends the run at once", run_go(fr[..], opt[..]) == 0 && !file_exists(str(fr, "/args.2")[..]) && has(slurp(str(fr, "/se")[..])[..], "Check passed"));
+	run_fake(fr[..], rs[..]);
+	check("without --check nothing is added", run_go(fr[..], "task") == 0 && !has(slurp(str(fr, "/kb/runs/", run_id(fr[..]), "/settings.json")[..])[..], "PostToolBatch") && !has(slurp(str(fr, "/kb/runs/", run_id(fr[..]), "/settings.json")[..])[..], "ATEX_RUN_DIR") && !has(slurp(str(fr, "/se")[..])[..], "Check"));
+	check("--check needs a command", run_go(fr[..], "task --check") == 2);
+}
 fn test_versions(repo const byte[:]) {
 	run_command(str(quote(BIN[..]), " --version > ", quote(str(T, "/v")))[..]);
 	let line = slurp(str(T, "/v")[..]);
@@ -424,7 +559,8 @@ fn test_versions(repo const byte[:]) {
 	run_command(str(quote(BIN[..]), " bench ", quote(str(repo, "/bench/lookup_heldout.tsv")), " --atex-dir ", quote(vkb[..]), " > ", quote(str(T, "/bv")), " 2>/dev/null")[..]);
 	check("atex bench reports the same version", has(slurp(str(T, "/bv")[..])[..], str("\"engine\":\"atex ", v, "\"")[..]));
 	check("an unknown command fails instead of waiting", run_command(str(quote(BIN[..]), " nosuchcommand < /dev/null > /dev/null 2>&1")[..]) != 0);
-	check("no Python is left in the repository", run_command(str("cd ", quote(repo), " && ! git ls-files | grep -q -E '\\.py$|pyproject'")[..]) == 0);
+	check("the plugin start hook runs in every session", has(slurp(str(repo, "/hooks/hooks.json")[..])[..], "atex hook start") && !has(slurp(str(repo, "/hooks/hooks.json")[..])[..], "clear|compact"));
+	check("no Python is left in the repository",run_command(str("cd ", quote(repo), " && ! git ls-files | grep -q -E '\\.py$|pyproject'")[..]) == 0);
 }
 fn main() {
 	let av = args();
@@ -443,6 +579,7 @@ fn main() {
 	test_install();
 	test_replay();
 	test_run();
+	test_check();
 	test_versions(av[2]);
 	run_command(str("rm -rf ", quote(T[..]))[..]);
 	write_stdout(str(RUNS - FAILS, " of ", RUNS, " checks passed\n")[..]);

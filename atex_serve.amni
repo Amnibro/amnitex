@@ -1322,7 +1322,7 @@ fn claude_rows(bin_path const byte[:], kb_dir const byte[:]) byte[>..][>..] {
 	sh_quote(kq, kb_dir);
 	for ev in ["Stop", "SessionStart", "PostToolUse"] {
 		let kind = if ev == "Stop" { "stop" } else if ev == "SessionStart" { "start" } else { "tool" };
-		let ma = if ev == "SessionStart" { "\"matcher\":\"clear|compact\"," } else if ev == "PostToolUse" { "\"matcher\":\"Bash\"," } else { "" };
+		let ma = if ev == "PostToolUse" { "\"matcher\":\"Bash\"," } else { "" };
 		rows.push(str(ev));
 		rows.push(str("{", ma, "\"hooks\":[{\"type\":\"command\",\"command\":", json_str(str(q, " hook ", kind, " --atex-dir ", kq)[..]), "}]}"));
 	}
@@ -1422,11 +1422,28 @@ fn hook_kb(raw const byte[:]) byte[>..] {
 	let e = find(raw[s..], "'");
 	if e < 0 { str("") } else { str(raw[s..s + e]) }
 }
+fn start_all(d json::Doc&, root int) bool {
+	let ss = json::member(d, json::member(d, root, "hooks"), "SessionStart");
+	var c = if ss >= 0 { d.nodes[ss].first } else { -1 };
+	var ok = false;
+	while c >= 0 {
+		let m, _ = json::as_string(d, json::member(d, c, "matcher"));
+		let hs = json::member(d, c, "hooks");
+		var h = if hs >= 0 { d.nodes[hs].first } else { -1 };
+		while h >= 0 {
+			let cmd, _ = json::as_string(d, json::member(d, h, "command"));
+			ok = ok || ((m.len == 0 || m == "*") && is_atex_hook(cmd) && find(cmd, " hook start") >= 0);
+			h = d.nodes[h].next;
+		}
+		c = d.nodes[c].next;
+	}
+	ok
+}
 fn run_doctor() {
 	var hm byte[>..] = [];
 	env("HOME", hm);
 	var fails = 0;
-	write_stdout("atex 0.4.5 (gold/helium-native)\n");
+	write_stdout("atex 0.4.6 (gold/helium-native)\n");
 	if is_dir(str(hm, "/.claude")) {
 		var raw byte[>..] = [];
 		read_file(str(hm, "/.claude/settings.json"), raw);
@@ -1435,6 +1452,7 @@ fn run_doctor() {
 		doctor_row(root >= 0, "Claude Code settings.json is readable", fails);
 		doctor_row(find(raw[..], " hook stop") >= 0, "hook that saves each turn", fails);
 		doctor_row(find(raw[..], " hook start") >= 0, "hook that restores state after /clear and compaction", fails);
+		doctor_row(start_all(d, root), "that hook runs in every session, so the assistant is asked to group tool calls", fails);
 		doctor_row(find(raw[..], " hook tool") >= 0, "hook that keeps long Bash output on disk", fails);
 		let w, okw = json::as_string(d, json::member(d, json::member(d, root, "env"), window_key()));
 		write_stdout(if okw { str("ok compact window ", w, " (compacts about 33K tokens earlier)\n") } else { str("off compaction setting; Claude Code uses its default\n") });
@@ -1538,6 +1556,8 @@ fn excerpt_output(s const byte[:], budget int, path const byte[:]) byte[>..] {
 }
 fn hook_tool(kb_dir const byte[:]) {
 	var inp byte[>..] = [];
+	var rd byte[>..] = [];
+	var cmd byte[>..] = [];
 	read_stdin(inp);
 	let cap = env_int("ATEX_TOOL_CAP", 4200);
 	let cut = env_int("ATEX_RUN_CUT", 0);
@@ -1545,16 +1565,50 @@ fn hook_tool(kb_dir const byte[:]) {
 	var d = json::Doc {};
 	let root, _ = json::parse(trim(inp[..]), d);
 	if root < 0 { return; }
-	let stop = cut > 0 && run_over(d, root, cut);
-	let capped = if cap > 0 && inp.len > cap { tool_capped(d, root, cap, kb_dir) } else { str("") };
-	if !stop && capped.len == 0 { return; }
+	let calls = json::member(d, root, "tool_calls");
+	let mark = if env("ATEX_RUN_DIR", rd) && rd.len > 0 { str(rd, "/batch.ok") } else { str("") };
+	var dirty = false;
+	var c = if calls >= 0 && mark.len > 0 && write_file(mark[..], "1\n") && read_file(str(rd, "/check.cmd"), cmd) { d.nodes[calls].first } else { -1 };
+	while c >= 0 {
+		let tn, _ = json::as_string(d, json::member(d, c, "tool_name"));
+		let bc, _ = json::as_string(d, json::member(d, json::member(d, c, "tool_input"), "command"));
+		dirty = tn == "Edit" || tn == "Write" || (dirty && !(tn == "Bash" && find(bc, trim(cmd[..])) >= 0));
+		c = d.nodes[c].next;
+	}
+	let stop = cut > 0 && (calls >= 0 || mark.len == 0 || !file_exists(mark[..])) && run_over(d, root, cut);
+	var more = if calls < 0 && cap > 0 && inp.len > cap { tool_capped(d, root, cap, kb_dir) } else { str("") };
+	if dirty {
+		var note = str("[atex check] After your edits, ");
+		run_check(rd[..], note);
+		more = str("\"hookSpecificOutput\":{\"hookEventName\":\"PostToolBatch\",\"additionalContext\":", json_str(note[..]), "}");
+	}
+	if !stop && more.len == 0 { return; }
 	var o = str("{");
 	if stop { o.append("\"continue\":false,\"stopReason\":\"atex: cutting context here\""); }
-	if stop && capped.len > 0 { o.push(','); }
-	o.append(capped[..]);
+	if stop && more.len > 0 { o.push(','); }
+	o.append(more[..]);
 	o.append("}\n");
 	write_stdout(o[..]);
 	flush_stdout();
+}
+fn run_check(rd const byte[:], out byte[>..]&) int {
+	let secs = env_int("ATEX_CHECK_SECS", 270);
+	var cmd byte[>..] = [];
+	var pwd byte[>..] = [];
+	var body byte[>..] = [];
+	read_file(str(rd, "/check.cmd"), cmd);
+	read_file(str(rd, "/pwd.txt"), pwd);
+	let path = str(rd, "/check.txt");
+	let sh = str("sh ", sh_q(str(rd, "/check.cmd")[..]));
+	delete_file(path[..]);
+	let rc = run_command(str(if trim(pwd[..]).len > 0 { str("cd ", sh_q(trim(pwd[..])), " && ") } else { str("") }, "if command -v timeout > /dev/null 2>&1; then timeout ", secs, " ", sh, "; else ", sh, "; fi > ", sh_q(path[..]), " 2>&1 < /dev/null")[..]);
+	read_file(path[..], body);
+	var at = max(0, body.len - 300);
+	while at > 0 && at < body.len && body[at - 1] != '\n' { at += 1; }
+	if at >= body.len { at = utf8_floor(body[..], max(0, body.len - 300)); }
+	let shown = if rc == 0 { str(trim(body[at..])) } else { excerpt_output(trim(body[..]), 1500, path[..]) };
+	out.append(str("`", trim(cmd[..]), "` ", if rc == 124 { str("did not finish in ", secs, " s") } else { str("gave exit code ", rc) }, if shown.len > 0 { ":\n" } else { ", no output." }, shown)[..]);
+	rc
 }
 fn tool_capped(d json::Doc&, root int, cap int, kb_dir const byte[:]) byte[>..] {
 	let tn, _ = json::as_string(d, json::member(d, root, "tool_name"));
@@ -1627,7 +1681,7 @@ fn run_install(bin_arg const byte[:], kb_dir const byte[:]) {
 		if is_dir(str(hm, "/.claude")) {
 			let rows = claude_rows(bin_path[..], kb_dir);
 			let hr = hooks_update(str(hm, "/.claude/settings.json")[..], rows[..], !NO_WINDOW, "{}");
-			write_stdout(if hr < 0 { "  ! ~/.claude/settings.json is not valid JSON; left unchanged\n" } else { "  + Claude Code hooks (saves turns, restores state after /clear and compaction, keeps long Bash output on disk)\n" });
+			write_stdout(if hr < 0 { "  ! ~/.claude/settings.json is not valid JSON; left unchanged\n" } else { "  + Claude Code hooks (saves turns, restores state after /clear and compaction, keeps long Bash output on disk, asks the assistant to group tool calls)\n" });
 			if hr >= 0 && !NO_WINDOW { write_stdout(str("  + Claude Code compacts at about 250K tokens (", window_key(), "=", window_val(), ") unless you already set that. To turn this off: atex install --no-compact-window\n")[..]); }
 		}
 		if is_dir(str(hm, "/.cursor")) { wire_cursor(hm[..], bin_path[..], kb_dir); }
@@ -1932,15 +1986,17 @@ fn save_turn(d json::Doc&, root int) {
 	}
 	save_kb_entry(str(base, "latest_state")[..], stt[..]);
 }
+fn chain_tip() const byte[:] { "Every reply re-reads your whole context, so use as few replies as you can. Tool calls in one reply run in the order you write them: send the edits, the command that checks them and the reads for your next step together in one reply, not one tool call per reply. A later call still runs when an earlier one fails, so a step that must not follow a failure (a commit, a push, a release, a delete) goes behind && in the same command or in a later reply." }
 fn hook_start(d json::Doc&, root int) {
 	let src, _ = json::as_string(d, json::member(d, root, "source"));
 	let cwd, _ = json::as_string(d, json::member(d, root, "cwd"));
-	if src == "startup" { return; }
-	let k = str("conv::", proj_slug(cwd), "::latest_state");
-	if !(kfind(k[..]) >= 0) { return; }
+	let id = if src == "startup" || src == "resume" { -1 } else { kfind(str("conv::", proj_slug(cwd), "::latest_state")[..]) };
+	var text = if id >= 0 { str(entry_text(id)) } else { str("") };
+	if env_int("ATEX_TIP", 1) != 0 { text.append(str(if text.len > 0 { "\n" } else { "" }, "[atex] ", chain_tip())[..]); }
+	if text.len == 0 { return; }
 	var out byte[>..] = [];
 	out.append("{\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":");
-	json::format_string(out, entry_text(kfind(k[..])));
+	json::format_string(out, text[..]);
 	out.append("}}\n");
 	write_stdout(out[..]);
 	flush_stdout();
@@ -2671,7 +2727,7 @@ fn run_bench(tsv const byte[:]) {
 		rows.append("}");
 	}
 	var out byte[>..] = [];
-	out.append("{\"engine\":\"atex 0.4.5\",\"k\":");
+	out.append("{\"engine\":\"atex 0.4.6\",\"k\":");
 	format(out, DEF_K);
 	out.append(",\"max_chars\":");
 	format(out, DEF_MC);
@@ -2911,15 +2967,20 @@ fn run_replay(dir0 const byte[:]) {
 	var turns = 0;
 	var grown = 0.0;
 	var made = 0.0;
+	var solo real[>..] = [0.0, 0.0, 0.0, 0.0];
 	for ev in sessions {
 		var last = 0;
 		var out = 0;
 		var chars = 0;
+		var nres = 0;
 		var clean = true;
 		var base = 0;
 		for e in ev {
-			if e.k == 1 { chars += e.a; } else if e.k == 2 { turns += 1; clean = false; } else {
+			if e.k == 1 { chars += e.a; nres += 1; } else if e.k == 2 { turns += 1; clean = false; } else {
 				calls += 1;
+				if nres > 0 { solo[2] += 1.0; solo[3] += e.a as real; }
+				if nres == 1 { solo[0] += 1.0; solo[1] += e.a as real; }
+				nres = 0;
 				base = if base == 0 { e.a } else { min(base, e.a) };
 				made += e.b as real;
 				if !rp_is_drop(last, e.a) && last > 0 { grown += max(0, e.a - last) as real; }
@@ -2986,7 +3047,7 @@ fn run_replay(dir0 const byte[:]) {
 	let names = ["typed by user", "assistant text", "thinking in log", "Edit and Write input", "other tool input", "Bash results", "", "Read results", "Grep and Glob results", "MCP and web results", "Agent results", "other results"];
 	var msum = 0.0;
 	for x in mix { msum += x; }
-	write_stdout(str("\ngrowth=", (grown / 1000000.0) as int, "M output=", (made / 1000000.0) as int, "M avg_context=", (b.tok / max(calls as real, 1.0)) as int, " growth_per_call=", (grown / max(calls as real, 1.0)) as int, " calls_per_turn=", calls / max(turns, 1), " today_reads=", fmt(100.0 * b.rd * 0.05 / max(rp_cost(b, 2.0), 1.0), 1), "% today_writes=", fmt(100.0 * b.wr * 2.0 / max(rp_cost(b, 2.0), 1.0), 1), "%\n")[..]);
+	write_stdout(str("\ngrowth=", (grown / 1000000.0) as int, "M output=", (made / 1000000.0) as int, "M avg_context=", (b.tok / max(calls as real, 1.0)) as int, " growth_per_call=", (grown / max(calls as real, 1.0)) as int, " calls_per_turn=", calls / max(turns, 1), " today_reads=", fmt(100.0 * b.rd * 0.05 / max(rp_cost(b, 2.0), 1.0), 1), "% today_writes=", fmt(100.0 * b.wr * 2.0 / max(rp_cost(b, 2.0), 1.0), 1), "% one_call_replies=", fmt(100.0 * solo[0] / max(solo[2], 1.0), 1), "% one_call_input=", fmt(100.0 * solo[1] / max(solo[3], 1.0), 1), "%\n")[..]);
 	for i in 0..names.len { if names[i].len > 0 { write_stdout(str(names[i], ": ", fmt(100.0 * mix[i] / max(msum, 1.0), 1), "% (", (mix[i] * r / 1000000.0) as int, "M tokens)\n")[..]); } }
 	write_stdout("\n\"cut +A to +B, back C, start D\" means: when context reaches A above startup, cut it to B above startup, read back C, with a startup size of D.\n\n");
 	for k in 0..pols.len {
@@ -3070,7 +3131,7 @@ fn run_add(t RunTot&, r const RunRes&) {
 fn run_say(s const byte[:]) { write_stderr(str("[atex run] ", s, "\n")[..]); }
 fn run_k(n int) byte[>..] { if n >= 10000000 { str(n / 1000000, "M") } else { str(n / 1000, "K") } }
 fn run_usd(c real) byte[>..] {
-	let cents = (c * 100.0) as int;
+	let cents = (c * 100.0 + 0.5) as int;
 	str("$", cents / 100, ".", if cents % 100 < 10 { "0" } else { "" }, cents % 100)
 }
 fn sh_q(v const byte[:]) byte[>..] {
@@ -3090,8 +3151,9 @@ fn run_save(on bool, key const byte[:], text const byte[:]) {
 		kb_unlock();
 	}
 }
-fn run_system() byte[>..] {
-	var o = str("You are a coding agent running unattended from the command line. Nobody can answer questions, so make the sensible choice and say so at the end. Check your work with the project's tests when it has them. Keep tool output small: search with rg or grep, read line ranges, and trim long command output. Long Bash output is saved to a file and the path is shown. Your working context is cut from time to time, and you will be asked for notes first. When the whole task is done, end your turn with what changed and how you checked it.\n");
+fn run_system(check const byte[:]) byte[>..] {
+	var o = str("You are a coding agent running unattended from the command line. Nobody can answer questions, so make the sensible choice and say so at the end. Check your work with the project's tests when it has them. Keep tool output small: search with rg or grep, read line ranges, and trim long command output. Long Bash output is saved to a file and the path is shown. ", chain_tip(), " Your working context is cut from time to time, and you will be asked for notes first. When the whole task is done, end your turn with what changed and how you checked it.\n");
+	if check.len > 0 { o.append(str("\nCheck command: ", check, "\natex runs it by itself after every reply in which you change a file with Edit or Write, and shows the result with your tool results. So do not run it yourself, even where the task says to: use the result atex shows. Keep going in the same reply as your edits by reading what the next step needs, and when a result shows a failure, fix that first. The task is done only when the check exits 0.\n")[..]); }
 	var hm byte[>..] = [];
 	var pwd byte[>..] = [];
 	env("HOME", hm);
@@ -3134,14 +3196,16 @@ fn run_model(extra const byte[:]) byte[>..] {
 fn run_claude(flags const byte[:], prompt const byte[:], log const byte[:]) int {
 	run_command(str("CLAUDE_CODE_PROMPT_CACHE_TTL=${CLAUDE_CODE_PROMPT_CACHE_TTL:-5m} claude -p ", flags, " < ", sh_q(prompt), " > ", sh_q(log), " 2> ", sh_q(str(log, ".err")[..]))[..])
 }
-fn run_end(t const RunTot&, text const byte[:], rd const byte[:], kb_ok bool, key const byte[:]) int {
+fn run_end(t const RunTot&, text const byte[:], rd const byte[:], kb_ok bool, key const byte[:], check const byte[:], bad const byte[:]) int {
 	write_stdout(str(text, "\n")[..]);
 	flush_stdout();
 	run_save(kb_ok, key, text);
+	let msg = if bad.len > 0 { str(bad) } else { str("Check passed: ", check) };
+	if check.len > 0 { run_say(msg[..]); }
 	run_stats(t, rd);
-	0
+	if bad.len > 0 { 4 } else { 0 }
 }
-fn run_task(task const byte[:], kb_dir const byte[:], cut int, parts int, allow bool, extra const byte[:], bin const byte[:]) int {
+fn run_task(task const byte[:], kb_dir const byte[:], cut int, parts int, allow bool, extra const byte[:], bin const byte[:], check const byte[:]) int {
 	ensure_kb_dirs(kb_dir);
 	let kb_ok = load_kb(kb_dir);
 	make_dir(str(kb_dir, "/runs"));
@@ -3152,8 +3216,12 @@ fn run_task(task const byte[:], kb_dir const byte[:], cut int, parts int, allow 
 	let sys = str(rd, "/system.txt");
 	let cfg = str(rd, "/settings.json");
 	let ask = str(rd, "/notes-prompt.txt");
-	let hook = str("ATEX_RUN_CUT=", cut, " ", sh_q(bin), " hook tool --atex-dir ", sh_q(kb_dir));
-	if !write_file(sys[..], run_system()[..]) || !write_file(cfg[..], str("{\"hooks\":{\"PostToolUse\":[{\"matcher\":\"\",\"hooks\":[{\"type\":\"command\",\"command\":", json_str(hook[..]), "}]}]}}\n")[..]) {
+	let on = check.len > 0;
+	var base byte[>..] = [];
+	let cok = !on || (write_file(str(rd, "/check.cmd"), str(check, "\n")[..]) && run_command(str("pwd -P > ", sh_q(str(rd, "/pwd.txt")[..]))[..]) == 0 && read_file(str(rd, "/pwd.txt"), base));
+	let ard = if on && rd[0] != '/' { str(trim(base[..]), "/", rd) } else { str(rd) };
+	let hook = str("\"hooks\":[{\"type\":\"command\",\"command\":", json_str(str(if on { str("ATEX_RUN_DIR=", sh_q(ard[..]), " ") } else { str("") }, "ATEX_RUN_CUT=", cut, " ", sh_q(bin), " hook tool --atex-dir ", sh_q(kb_dir))[..]));
+	if !cok || !write_file(sys[..], run_system(check)[..]) || !write_file(cfg[..], str("{\"hooks\":{\"PostToolUse\":[{\"matcher\":\"\",", hook, "}]}]", if on { str(",\"PostToolBatch\":[{", hook, ",\"timeout\":", env_int("ATEX_CHECK_SECS", 270) + 30, "}]}]") } else { str("") }, "}}\n")[..]) {
 		run_say(str("Cannot write to ", rd)[..]);
 		return 1;
 	}
@@ -3167,30 +3235,52 @@ fn run_task(task const byte[:], kb_dir const byte[:], cut int, parts int, allow 
 	var notes byte[>..] = [];
 	var n = 1;
 	while n <= parts {
-		let pp = str(rd, "/part-", n, ".prompt");
-		let log = str(rd, "/part-", n, ".jsonl");
+		var pp = str(rd, "/part-", n, ".prompt");
+		var log = str(rd, "/part-", n, ".jsonl");
+		var fl = str(flags, " --max-turns ", turns);
 		let key = str("run::", id, "::part_", n);
 		let body = if n == 1 { str(task) } else { str("Task:\n", task, "\n\nThis is part ", n, " of the work. Notes from the previous part:\n\n", notes, "\n\nContinue from the notes. Do not redo finished work or reread what you do not need. Raw logs of earlier parts are ", rd, "/part-*.jsonl; search them with rg only if a detail is missing. When the whole task is finished, your last reply must cover every part of the work, not only this one, and name only what you can confirm from the files.\n") };
 		write_file(pp[..], body[..]);
-		let rc = run_claude(str(flags, " --max-turns ", turns)[..], pp[..], log[..]);
-		var raw byte[>..] = [];
-		read_file(log[..], raw);
-		let p = run_span(raw[..]);
-		let r = run_result(raw[..]);
-		t.parts = n;
-		t.calls += p.calls;
-		run_add(t, r);
-		run_say(str("Part ", n, ": ", p.calls, " calls, context ", run_k(p.first), " to ", run_k(p.last), if r.cut { ", cut." } else { "." })[..]);
-		if !r.ok || (rc != 0 && !r.cut) {
-			var er byte[>..] = [];
-			read_file(str(log, ".err"), er);
-			let tail = if r.text.len > 0 { str(r.text) } else { str(er[max(0, er.len - 400)..]) };
-			run_say(str("Part ", n, " stopped with an error: ", tail)[..]);
-			run_save(kb_ok, key[..], str("atex run stopped with an error in part ", n, ". Last notes:\n", notes)[..]);
-			run_stats(t, rd[..]);
-			return 1;
+		var r = run_result("");
+		var bad byte[>..] = [];
+		var sc = 0.0;
+		var fix = 0;
+		var go = true;
+		while go {
+			let rc = run_claude(fl[..], pp[..], log[..]);
+			var raw byte[>..] = [];
+			read_file(log[..], raw);
+			let p = run_span(raw[..]);
+			r = run_result(raw[..]);
+			t.parts = n;
+			t.calls += p.calls;
+			run_add(t, r);
+			if r.cost >= sc { t.cost -= sc; }
+			sc = if r.cost >= sc { r.cost } else { sc + r.cost };
+			run_say(str("Part ", n, if fix > 0 { str(", fix ", fix) } else { str("") }, ": ", p.calls, " calls, context ", run_k(p.first), " to ", run_k(p.last), if r.cut { ", cut." } else { "." })[..]);
+			if !r.ok || (rc != 0 && !r.cut) {
+				var er byte[>..] = [];
+				read_file(str(log, ".err"), er);
+				let tail = if r.text.len > 0 { str(r.text) } else { str(er[max(0, er.len - 400)..]) };
+				run_say(str("Part ", n, " stopped with an error: ", tail)[..]);
+				run_save(kb_ok, key[..], str("atex run stopped with an error in part ", n, ". Last notes:\n", notes)[..]);
+				run_stats(t, rd[..]);
+				return 1;
+			}
+			if on && n == 1 && fix == 0 && p.calls > 1 && !file_exists(str(rd, "/batch.ok")) { run_say("This Claude Code version did not run the check after edits, so it runs only when the task is reported done."); }
+			var note byte[>..] = [];
+			let crc = if on && !r.cut { run_check(ard[..], note) } else { 0 };
+			bad = if crc != 0 && fix == 2 { str("The check still fails after 2 fix rounds. ", note) } else { str("") };
+			go = crc != 0 && fix < 2;
+			if go {
+				fix += 1;
+				pp = str(rd, "/part-", n, ".fix-", fix, ".prompt");
+				log = str(rd, "/part-", n, ".fix-", fix, ".jsonl");
+				fl = str(flags, " --resume ", sh_q(r.sid[..]), " --max-turns ", turns);
+				write_file(pp[..], str("You reported the task done, but the check fails. ", note, "\nFix what it reports, then end your turn again with the full report for the whole task.\n")[..]);
+			}
 		}
-		if !r.cut { return run_end(t, r.text[..], rd[..], kb_ok, str("run::", id, "::result")[..]); }
+		if !r.cut { return run_end(t, r.text[..], rd[..], kb_ok, str("run::", id, "::result")[..], check, bad[..]); }
 		let nl = str(rd, "/part-", n, ".notes.jsonl");
 		run_claude(str(flags, " --resume ", sh_q(r.sid[..]), " --max-turns 1")[..], ask[..], nl[..]);
 		var nraw byte[>..] = [];
@@ -3198,11 +3288,13 @@ fn run_task(task const byte[:], kb_dir const byte[:], cut int, parts int, allow 
 		let w = run_result(nraw[..]);
 		t.calls += 1;
 		run_add(t, w);
-		if w.cost >= r.cost { t.cost -= r.cost; }
+		if w.cost >= sc { t.cost -= sc; }
 		notes = if w.ok && w.text.len > 0 { str(trim(w.text[..])) } else { str("CONTINUE\nNo notes were written for this part. Its raw log is ", log, ".") };
+		var why byte[>..] = [];
+		if on && starts_with(notes[..], "DONE") && run_check(ard[..], why) != 0 { notes = str("CONTINUE\nThe last part reported the task done, but the check fails. ", why, "\nIts report was:\n", trim(notes[4..])); }
 		write_file(str(rd, "/part-", n, ".notes.txt"), notes[..]);
 		run_save(kb_ok, key[..], notes[..]);
-		if starts_with(notes[..], "DONE") { return run_end(t, trim(notes[4..]), rd[..], kb_ok, str("run::", id, "::result")[..]); }
+		if starts_with(notes[..], "DONE") { return run_end(t, trim(notes[4..]), rd[..], kb_ok, str("run::", id, "::result")[..], check, ""); }
 		n += 1;
 	}
 	run_say(str("Stopped after ", parts, " parts with the task unfinished. To go on, run a new task that points at ", rd, "/part-", parts, ".notes.txt, or raise --parts.")[..]);
@@ -3210,10 +3302,11 @@ fn run_task(task const byte[:], kb_dir const byte[:], cut int, parts int, allow 
 	3
 }
 fn run_args(av const byte[>..][:], from int, dir0 const byte[:]) int {
-	let usage = "Usage: atex run [--cut <tokens>] [--parts <n>] [--allow-all] [--atex-dir <dir>] \"<task>\" [-- <claude flags>]\n";
+	let usage = "Usage: atex run [--cut <tokens>] [--parts <n>] [--check \"<command>\"] [--allow-all] [--atex-dir <dir>] \"<task>\" [-- <claude flags>]\n";
 	var dir = str(dir0);
 	var task byte[>..] = [];
 	var extra byte[>..] = [];
+	var check byte[>..] = [];
 	var cut = 40000;
 	var parts = 30;
 	var allow = false;
@@ -3231,9 +3324,10 @@ fn run_args(av const byte[>..][:], from int, dir0 const byte[:]) int {
 		} else if a == "--allow-all" {
 			allow = true;
 			i += 1;
-		} else if (a == "--cut" || a == "--parts" || a == "--atex-dir") && i + 1 < av.len {
+		} else if (a == "--cut" || a == "--parts" || a == "--atex-dir" || a == "--check") && i + 1 < av.len {
 			if a == "--cut" { cut = digits_or(av[i + 1], 0); }
 			else if a == "--parts" { parts = digits_or(av[i + 1], 0); }
+			else if a == "--check" { check = str(trim(av[i + 1])); }
 			else { dir = str(av[i + 1]); }
 			i += 2;
 		} else if a == "--help" || a == "-h" {
@@ -3258,7 +3352,7 @@ fn run_args(av const byte[>..][:], from int, dir0 const byte[:]) int {
 	env("PWD", pwd);
 	let a0 = if av.len > 0 { str(av[0]) } else { str("atex") };
 	let bin = if find(a0[..], "/") > 0 && pwd.len > 0 { str(pwd, "/", a0) } else { str(a0) };
-	run_task(task[..], dir[..], cut, parts, allow, extra[..], bin[..])
+	run_task(task[..], dir[..], cut, parts, allow, extra[..], bin[..], check[..])
 }
 fn main() {
 	let av = args();
@@ -3269,11 +3363,11 @@ fn main() {
 	while i < av.len {
 		let a = av[i];
 		if a == "--version" || a == "-v" {
-			write_stdout("atex 0.4.5 (gold/helium-native)\n");
+			write_stdout("atex 0.4.6 (gold/helium-native)\n");
 			flush_stdout();
 			return;
 		} else if a == "--help" || a == "-h" || a == "help" {
-			write_stdout("atex 0.4.5 (gold/helium-native)\nUsage:\n  atex [serve] [--atex-dir <dir>]     Run MCP stdio server\n  atex init [project_dir] [--atex-dir <dir>]  Index project docs & code into KB\n  atex install [--atex-dir <dir>] [--no-compact-window]  Wire Claude Code, Cursor, Windsurf, Gemini, Codex, Grok\n  atex uninstall                      Remove the wiring; knowledge bases stay\n  atex doctor                         Check the wiring\n  atex replay [projects_dir]          Model what each setting would have saved on your own Claude Code sessions\n  atex run \"<task>\" [--cut <tokens>] [--parts <n>] [--allow-all] [-- <claude flags>]  Run a task in Claude Code in small parts, cutting context between them\n  atex stats [--atex-dir <dir>]       Print knowledge base statistics\n  atex bench <questions.tsv>          Measure answer recall and output size vs whole-file reads\n  atex --selftest                     Run end-to-end TexGrid & byte-page self-test\n");
+			write_stdout("atex 0.4.6 (gold/helium-native)\nUsage:\n  atex [serve] [--atex-dir <dir>]     Run MCP stdio server\n  atex init [project_dir] [--atex-dir <dir>]  Index project docs & code into KB\n  atex install [--atex-dir <dir>] [--no-compact-window]  Wire Claude Code, Cursor, Windsurf, Gemini, Codex, Grok\n  atex uninstall                      Remove the wiring; knowledge bases stay\n  atex doctor                         Check the wiring\n  atex replay [projects_dir]          Model what each setting would have saved on your own Claude Code sessions\n  atex run \"<task>\" [--cut <tokens>] [--parts <n>] [--check \"<command>\"] [--allow-all] [-- <claude flags>]  Run a task in Claude Code in small parts, cutting context between them; --check runs your test command after every edit\n  atex stats [--atex-dir <dir>]       Print knowledge base statistics\n  atex bench <questions.tsv>          Measure answer recall and output size vs whole-file reads\n  atex --selftest                     Run end-to-end TexGrid & byte-page self-test\n");
 			flush_stdout();
 			return;
 		} else if a == "--selftest" || a == "selftest" {
@@ -3345,7 +3439,7 @@ fn main() {
 			var out byte[>..] = [];
 			out.append("{\"jsonrpc\":\"2.0\",");
 			write_id(out, d, id_node);
-			out.append(",\"result\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"atex-gold\",\"version\":\"0.4.5\"}}}\n");
+			out.append(",\"result\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"atex-gold\",\"version\":\"0.4.6\"}}}\n");
 			write_stdout(out[..]);
 			flush_stdout();
 		} else if m == "tools/list" {

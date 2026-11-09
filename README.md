@@ -1,4 +1,4 @@
-# atex (amni-tex) — Native Gold/Helium Edition (v0.4.5)
+# atex (amni-tex) — Native Gold/Helium Edition (v0.4.6)
 
 **A lossless local byte-page memory layer for MCP-capable AI coding assistants. It also stores every conversation turn so earlier facts can be recalled exactly.**
 Written in [Gold](https://github.com/Amnibro/gold) and compiled to native [Helium](https://github.com/Amnibro/helium). Local. No embeddings. No cloud. MIT-licensed. Exact-match nonce lookup through an RGBA texture LUT (`index.tex`): a 15 MB knowledge base loads in 22 ms.
@@ -51,13 +51,13 @@ Every AI coding assistant either forgets your project at session boundaries or r
 `atex` targets both problems with a single native Helium binary (`atex_serve.gold` $\rightarrow$ `atex`):
 1. **Lossless Byte-Page Store + 2D Spatial `TexGrid`:** Stores project docs, code symbols, and user-taught facts (`manual::*`) in 1 MiB byte-pages (`ATEXKB01`) indexed by a 64-bit FNV-1a 2D spatial texture grid (`TexGrid`). Subword and snake_case tokens are indexed automatically.
 2. **Conversation turn store (`conv::*`):** Saves every completed turn into `.atex` (`conv::<id>::turn_<N>` and `conv::latest_state`). Prior turns can be pulled back by keyword through the nonce LUT, without loss.
-3. **Bounded context in Claude Code:** Compacts sooner, restores state afterward, and keeps long Bash output on disk with a pointer in context.
+3. **Bounded context in Claude Code:** Compacts sooner, restores state afterward, keeps long Bash output on disk with a pointer in context, and asks the assistant to send its tool calls in fewer replies.
 
 ## Numbers
 
 ### What it saves in real sessions
 
-`atex replay` reads the usage Claude Code logged for each request in your own sessions, shows what fills your context, and models what each setting would have sent, with prompt-cache prices included. It makes no model calls, so it costs nothing to run.
+`atex replay` reads the usage Claude Code logged for each request in your own sessions, shows what fills your context, and models what each setting would have sent, with prompt-cache prices included. It makes no model calls, so it costs nothing to run. It also prints `one_call_replies`: of the requests that follow tool calls, the share that follow just one. `one_call_input` is the same share counted in input tokens. Grouped tool calls bring both down.
 
 On one person's 20 most recent long sessions (66,241 requests, 18.5B input tokens):
 
@@ -71,6 +71,25 @@ On one person's 20 most recent long sessions (66,241 requests, 18.5B input token
 - **This is a model, not a live run.** Run `atex replay` to see your own numbers. It does not count any rework from compacting sooner, and it assumes 30% of hidden Bash output gets read back.
 - **Cost** counts input only and uses Claude Opus 5.5 ratios: cache reads at 0.05×, 1-hour cache writes at 2× (what these sessions used), and an 8K-token summary at 5× per compaction. Subscription limits are not published, so your limit may move differently.
 - **Compacting sooner keeps context bounded**, so each request stops growing with session length. Claude Code compacts about 33K tokens before its window, so `atex install` sets the window to 283,000.
+
+### Fewer replies
+
+Every reply from the assistant re-reads the whole context, so fewer replies means less input. Since v0.4.6 the SessionStart hook and `atex run` ask the assistant to group its tool calls: the edits, the command that checks them and the next reads go in one reply. Measured on a 40-module bug-fix task, where every run passed the same 360 hidden checks:
+
+| Setup | Runs | Requests | Input tokens | API price |
+|---|---:|---:|---:|---:|
+| Claude Code session, Claude Opus 5.5 | 2 | 85 | 5.68M | $2.77 |
+| Claude Code session with the SessionStart instruction, Claude Opus 5.5 | 2 | 43 | 2.74M | $2.08 |
+| `atex run` v0.4.5, Claude Opus 5.5 | 3 | 100 | 2.54M | $1.73 |
+| `atex run` with grouped tool calls, Claude Opus 5.5 | 4 | 53 | 1.37M | $1.57 |
+| Claude Code session, Claude Haiku 5.5 | 2 | 105 | 9.39M | $0.46 |
+| Claude Code session with the SessionStart instruction, Claude Haiku 5.5 | 3 | 42 | 3.75M | $0.26 |
+| `atex run` v0.4.5, Claude Haiku 5.5 | 2 | 109 | 3.04M | $0.07 |
+| `atex run --check` with grouped tool calls, Claude Haiku 5.5 | 3 | 48 | 1.41M | $0.05 |
+
+Each row is the mean of its runs, and the Claude Code sessions are `claude -p` runs with no MCP servers. In each pair, requests and input fall by 46% to 60%. Price falls less, because cached input is the cheapest part of a request, and the assistant's own output and anything new it reads cost the same either way.
+
+Against a Claude Code session without the instruction, `atex run` with grouped tool calls used 76% less input on Claude Opus 5.5 and 85% less on Claude Haiku 5.5. Claude Code 2.1.321 prices a Claude Haiku 5.5 request above 100,000 prompt tokens at five times the base rate, and `atex run` at its default `--cut` kept every request below that line.
 
 ### Conversation store
 
@@ -108,8 +127,8 @@ Results stay current. Folders registered with `atex init <folder>` are checked o
 
 | Set | `atex_where` + one `atex_recall` | Whole files | Fewer characters |
 |---|---:|---:|---:|
-| Tuning set (22) | 30,938 | 765,061 | 96% |
-| Held-out set (10) | 22,879 | 371,443 | 94% |
+| Tuning set (22) | 27,175 | 775,593 | 96% |
+| Held-out set (10) | 21,633 | 371,443 | 94% |
 
 Measured with `atex bench <questions.tsv>`, which runs lookups with known answers and no live agent. Counts include a 41-line read at the right spot when the answer has not appeared yet. Results: [`bench/tier_tuning_results.json`](bench/tier_tuning_results.json), [`bench/tier_heldout_results.json`](bench/tier_heldout_results.json).
 
@@ -118,7 +137,7 @@ Measured with `atex bench <questions.tsv>`, which runs lookups with known answer
 `atex install` adds these to `~/.claude/settings.json`, keeping everything else there and saving the old file as `settings.json.atex-backup`. The Claude Code plugin's `hooks/hooks.json` adds the same hooks, but not the compact setting.
 
 - **Stop** → `atex hook stop` saves the turn's prompt, final reply and touched files as `conv::<project>::turn_<N>`, and refreshes `conv::<project>::latest_state`.
-- **SessionStart** (on `/clear` or compaction) → `atex hook start` injects `latest_state`, about 1.1K tokens holding the last three turns.
+- **SessionStart** → `atex hook start` asks the assistant to group its tool calls. Every reply re-reads the whole context, so edits, the command that checks them and the next reads go in one reply. A step that must not follow a failure, such as a commit or a push, stays behind `&&` or waits for a later reply. Set `ATEX_TIP=0` to turn this off. After `/clear` or compaction the hook also injects `latest_state`, about 1.1K tokens holding the last three turns.
 - **PostToolUse** (Bash) → `atex hook tool` keeps a long output on disk. The assistant sees the start, the end, and any error lines, plus a note with the path to the full output. Nothing in the conversation is edited later, so the prompt cache stays valid. Set `ATEX_TOOL_CAP` to change the limit (default 4,200 characters, about 2K tokens), or to `0` to turn this off.
 - **`CLAUDE_CODE_AUTO_COMPACT_WINDOW=283000`** → compacts at about 250K tokens. A value you already set is kept. Turn it off with `atex install --no-compact-window`.
 
@@ -130,7 +149,7 @@ Measured with `atex bench <questions.tsv>`, which runs lookups with known answer
 atex run --allow-all "Fix the failing tests in src/parser"
 ```
 
-1. It starts `claude -p` with six tools (`Bash`, `Read`, `Edit`, `Write`, `Grep`, `Glob`) and your `CLAUDE.md` rules, but no MCP servers, plugins, skills or settings hooks.
+1. It starts `claude -p` with six tools (`Bash`, `Read`, `Edit`, `Write`, `Grep`, `Glob`) and your `CLAUDE.md` rules, but no MCP servers, plugins, skills or settings hooks. Its instructions ask the agent to group tool calls, the same way the SessionStart hook does.
 2. After each tool call it checks how much context has grown. At `--cut` tokens (40,000 by default) it stops the part cleanly.
 3. It asks that same session for short notes on what is done, what is left and the next step. The session is resumed from the cache.
 4. The next part starts with only the task and those notes. This repeats until the task is finished or `--parts` is reached (30 by default).
@@ -139,8 +158,11 @@ atex run --allow-all "Fix the failing tests in src/parser"
 |---|---|
 | `--cut <tokens>` | Context growth allowed in each part |
 | `--parts <n>` | Most parts before stopping (exit code 3) |
+| `--check "<command>"` | A command that exits 0 when the work is right, for example `--check "npm test"` |
 | `--allow-all` | Let the agent run any tool without asking (`--dangerously-skip-permissions`). Without it, edits and reads are allowed and everything else, including `Bash`, is refused |
 | `-- <flags>` | Passed to `claude`, for example `-- --model sonnet --effort high` |
+
+With `--check`, atex runs the command itself after every reply that edits a file and shows the agent the exit code and the end of the output, so the agent does not spend a reply on running it. When the agent reports the task done, the command runs once more. If it fails, the agent gets the output and up to two more rounds to fix it. If it still fails, the run stops with exit code 4. The command runs with `sh` from the folder where `atex run` was started and is stopped after `ATEX_CHECK_SECS` seconds (270 by default).
 
 The final reply goes to standard output, and progress and token counts go to standard error. Each run keeps its prompts, notes and raw logs in `.atex/runs/<id>/`, and saves notes and the result as `run::<id>::part_<n>` and `run::<id>::result`, which `atex_recall` can read later.
 
