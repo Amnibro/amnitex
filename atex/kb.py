@@ -42,7 +42,12 @@ class KnowledgeBase:
         self._dirty=False
         self._adds_since_save=0
         if self.index_path.exists():
-            self.index=json.loads(self.index_path.read_text(encoding='utf-8'))
+            try:
+                self.index=json.loads(self.index_path.read_text(encoding='utf-8'))
+            except json.JSONDecodeError as exc:
+                raise KnowledgeBaseError(f'corrupt index.json: {exc}') from exc
+            if not isinstance(self.index,dict) or not isinstance(self.index.get('entries'),dict):
+                raise KnowledgeBaseError('corrupt index.json: missing entries object')
             self.page_w=int(self.index.get('page_w',_DEFAULT_PAGE_W))
             self.page_h=int(self.index.get('page_h',_DEFAULT_PAGE_H))
         else:

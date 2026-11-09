@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "command": ".cursor/hooks/atex.sh session-start"
+      }
+    ],
+    "stop": [
+      {
+        "command": ".cursor/hooks/atex.sh stop"
+      }
+    ]
+  }
+}

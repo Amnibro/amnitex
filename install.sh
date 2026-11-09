@@ -30,5 +30,10 @@ mv -f "$DEST/atex.new" "$DEST/atex"
 "$DEST/atex" --version
 "$DEST/atex" --selftest
 "$DEST/atex" init . --atex-dir "$KB"
+# Python wiring first so Cursor and Grok keep the tested server if the package is installed.
+# The native installer leaves an existing amnitex entry alone.
+if python3 -c 'import atex.cli' >/dev/null 2>&1; then
+  python3 -m atex.cli install --atex-dir "$KB"
+fi
 "$DEST/atex" install --atex-dir "$KB"
 printf "[amnitex] installed native Helium binary at %s/atex (kb=%s)\n" "$DEST" "$KB"

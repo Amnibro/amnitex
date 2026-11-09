@@ -542,6 +542,10 @@ fn load_kb(dir const byte[:]) bool {
 		flush_index();
 		return true;
 	}
+	if find(raw[..], "\"entries\"") < 0 {
+		write_stderr("[atex] corrupt index.json\n");
+		return false;
+	}
 	LAST_MTIME = file_mtime(idx_path);
 	var r = json::reader(raw[..]);
 	PAGES.clear();
@@ -981,11 +985,12 @@ fn hook_stop(d json::Doc&, root int) {
 	if !read_file(tp, raw) { return; }
 	var prompt byte[>..] = [];
 	var reply byte[>..] = [];
+	var tools byte[>..] = [];
 	var files byte[>..][>..] = [];
 	var ld = json::Doc {};
 	for ln in split(raw[..], '\n') {
-		let isu = find(ln, "\"type\":\"user\"") >= 0;
-		let isa = find(ln, "\"type\":\"assistant\"") >= 0;
+		let isu = find(ln, "\"type\":\"user\"") >= 0 || find(ln, "\"type\": \"user\"") >= 0;
+		let isa = find(ln, "\"type\":\"assistant\"") >= 0 || find(ln, "\"type\": \"assistant\"") >= 0;
 		if !isu && !isa { continue; }
 		let r, _ = json::parse(ln, ld);
 		if r < 0 { continue; }
@@ -1002,7 +1007,14 @@ fn hook_stop(d json::Doc&, root int) {
 				for i in 0..json::count(ld, ct) {
 					let it = json::element(ld, ct, i);
 					let bt, _ = json::as_string(ld, json::member(ld, it, "type"));
-					if bt == "tool_result" { tool_res = true; }
+					if bt == "tool_result" {
+						tool_res = true;
+						let c1, okc = json::as_string(ld, json::member(ld, it, "content"));
+						if okc && c1.len > 0 {
+							if tools.len > 0 { tools.push('\n'); }
+							tools.append(c1);
+						}
+					}
 					else if bt == "text" { let tx, _ = json::as_string(ld, json::member(ld, it, "text")); if txt.len > 0 { txt.push('\n'); } txt.append(tx); }
 				}
 			}
@@ -1011,6 +1023,7 @@ fn hook_stop(d json::Doc&, root int) {
 				prompt.clear();
 				prompt.append(tt);
 				reply.clear();
+				tools.clear();
 			}
 		} else {
 			for i in 0..json::count(ld, ct) {
@@ -1051,6 +1064,11 @@ fn hook_stop(d json::Doc&, root int) {
 	rec.append("Assistant: ");
 	rec.append(trim(reply[..]));
 	rec.push('\n');
+	if tools.len > 0 {
+		rec.append("Tool:\n");
+		rec.append(tools[..]);
+		rec.push('\n');
+	}
 	if files.len > 0 {
 		rec.append("Files:");
 		for f in files { rec.push(' '); rec.append(f[..]); }
@@ -1460,7 +1478,7 @@ fn main() {
 			var out byte[>..] = [];
 			out.append("{\"jsonrpc\":\"2.0\",");
 			write_id(out, d, id_node);
-			out.append(",\"result\":{\"tools\":[{\"name\":\"atex_search\",\"description\":\"Keyword search over the local atex knowledge base. Returns each matching key with a line range, the best-matching lines, and an also: list of every other matching line number. A footer enumerates all remaining matching keys; pass page=N for the next set. exact=true scans all stored text for a literal case-insensitive string and returns key:line rows. Try it before reading whole files.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\",\"description\":\"Search keywords\"},\"k\":{\"type\":\"integer\",\"default\":3},\"max_chars\":{\"type\":\"integer\",\"default\":600},\"page\":{\"type\":\"integer\",\"default\":1},\"exact\":{\"type\":\"boolean\",\"default\":false}},\"required\":[\"query\"]}},{\"name\":\"atex_recall\",\"description\":\"Exact-key lookup in the atex knowledge base. Returns the stored text, or the line range given by lines=\"a-b\" (as shown by atex_search). Truncated output names the exact remaining line range.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"key\":{\"type\":\"string\"},\"max_chars\":{\"type\":\"integer\",\"default\":2400},\"lines\":{\"type\":\"string\",\"description\":\"Line range a-b\"}},\"required\":[\"key\"]}},{\"name\":\"atex_remember\",\"description\":\"Persist a learned fact to the atex knowledge base under namespace manual::.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"key\":{\"type\":\"string\"},\"text\":{\"type\":\"string\"}},\"required\":[\"key\",\"text\"]}},{\"name\":\"atex_list_keys\",\"description\":\"List keys in the atex KB matching a prefix.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"prefix\":{\"type\":\"string\",\"default\":\"\"},\"max\":{\"type\":\"integer\",\"default\":50}},\"required\":[\"prefix\"]}},{\"name\":\"atex_stats\",\"description\":\"Get atex KB statistics and unbiased context tracker report path for the current conversation.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{}}}]}}\n");
+			out.append(",\"result\":{\"tools\":[{\"name\":\"atex_search\",\"description\":\"Keyword search over the local atex knowledge base. Returns each matching key with a line range, the best-matching lines, and an also: list of every other matching line number. A footer enumerates all remaining matching keys; pass page=N for the next set. exact=true scans all stored text for a literal case-insensitive string and returns key:line rows. Try it before reading whole files.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\",\"description\":\"Search keywords\"},\"k\":{\"type\":\"integer\",\"default\":3},\"max_chars\":{\"type\":\"integer\",\"default\":600},\"page\":{\"type\":\"integer\",\"default\":1},\"exact\":{\"type\":\"boolean\",\"default\":false}},\"required\":[\"query\"]}},{\"name\":\"atex_recall\",\"description\":\"Exact-key lookup in the atex knowledge base. Returns the stored text, or the line range given by lines=a-b (as shown by atex_search). Truncated output names the exact remaining line range.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"key\":{\"type\":\"string\"},\"max_chars\":{\"type\":\"integer\",\"default\":2400},\"lines\":{\"type\":\"string\",\"description\":\"Line range a-b\"}},\"required\":[\"key\"]}},{\"name\":\"atex_remember\",\"description\":\"Persist a learned fact to the atex knowledge base under namespace manual::.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"key\":{\"type\":\"string\"},\"text\":{\"type\":\"string\"}},\"required\":[\"key\",\"text\"]}},{\"name\":\"atex_list_keys\",\"description\":\"List keys in the atex KB matching a prefix.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"prefix\":{\"type\":\"string\",\"default\":\"\"},\"max\":{\"type\":\"integer\",\"default\":50}},\"required\":[\"prefix\"]}},{\"name\":\"atex_stats\",\"description\":\"Get atex KB statistics and unbiased context tracker report path for the current conversation.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{}}}]}}\n");
 			write_stdout(out[..]);
 			flush_stdout();
 		} else if m == "ping" {
