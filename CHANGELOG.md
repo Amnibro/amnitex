@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.4.4] — 2026-11-09
+
+### Added
+
+- `atex run "<task>"` runs a task in Claude Code in small parts. It starts `claude -p` with few tools and no MCP servers, plugins or skills. Once context has grown by `--cut` tokens (40,000 by default) it asks for short notes, then starts the next part with only the task and those notes. Notes, raw logs and the result are kept on disk and in the knowledge base.
+
 ## [0.4.3] — 2026-11-09
 
 ### Added

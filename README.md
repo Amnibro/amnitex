@@ -1,4 +1,4 @@
-# atex (amni-tex) — Native Gold/Helium Edition (v0.4.3)
+# atex (amni-tex) — Native Gold/Helium Edition (v0.4.4)
 
 **A lossless local byte-page memory layer for MCP-capable AI coding assistants. It also stores every conversation turn so earlier facts can be recalled exactly.**
 Written in [Gold](https://github.com/Amnibro/gold) and compiled to native [Helium](https://github.com/Amnibro/helium). Local. No embeddings. No cloud. MIT-licensed. Exact-match nonce lookup through an RGBA texture LUT (`index.tex`): a 15 MB knowledge base loads in 22 ms.
@@ -108,8 +108,8 @@ Results stay current. Folders registered with `atex init <folder>` are checked o
 
 | Set | `atex_where` + one `atex_recall` | Whole files | Fewer characters |
 |---|---:|---:|---:|
-| Tuning set (22) | 31,044 | 758,002 | 96% |
-| Held-out set (10) | 21,078 | 371,443 | 94% |
+| Tuning set (22) | 26,479 | 763,904 | 97% |
+| Held-out set (10) | 22,768 | 371,443 | 94% |
 
 Measured with `atex bench <questions.tsv>`, which runs lookups with known answers and no live agent. Counts include a 41-line read at the right spot when the answer has not appeared yet. Results: [`bench/tier_tuning_results.json`](bench/tier_tuning_results.json), [`bench/tier_heldout_results.json`](bench/tier_heldout_results.json).
 
@@ -121,6 +121,30 @@ Measured with `atex bench <questions.tsv>`, which runs lookups with known answer
 - **SessionStart** (on `/clear` or compaction) → `atex hook start` injects `latest_state`, about 1.1K tokens holding the last three turns.
 - **PostToolUse** (Bash) → `atex hook tool` keeps a long output on disk. The assistant sees the start, the end, and any error lines, plus a note with the path to the full output. Nothing in the conversation is edited later, so the prompt cache stays valid. Set `ATEX_TOOL_CAP` to change the limit (default 4,200 characters, about 2K tokens), or to `0` to turn this off.
 - **`CLAUDE_CODE_AUTO_COMPACT_WINDOW=283000`** → compacts at about 250K tokens. A value you already set is kept. Turn it off with `atex install --no-compact-window`.
+
+### Run a task in small parts
+
+`atex run` keeps context small for one whole task, with no proxy and using your normal Claude Code sign-in:
+
+```bash
+atex run --allow-all "Fix the failing tests in src/parser"
+```
+
+1. It starts `claude -p` with six tools (`Bash`, `Read`, `Edit`, `Write`, `Grep`, `Glob`) and your `CLAUDE.md` rules, but no MCP servers, plugins, skills or settings hooks.
+2. After each tool call it checks how much context has grown. At `--cut` tokens (40,000 by default) it stops the part cleanly.
+3. It asks that same session for short notes on what is done, what is left and the next step. The session is resumed from the cache.
+4. The next part starts with only the task and those notes. This repeats until the task is finished or `--parts` is reached (30 by default).
+
+| Option | What it does |
+|---|---|
+| `--cut <tokens>` | Context growth allowed in each part |
+| `--parts <n>` | Most parts before stopping (exit code 3) |
+| `--allow-all` | Let the agent run any tool without asking (`--dangerously-skip-permissions`). Without it, edits and reads are allowed and everything else, including `Bash`, is refused |
+| `-- <flags>` | Passed to `claude`, for example `-- --model sonnet --effort high` |
+
+The final reply goes to standard output, and progress and token counts go to standard error. Each run keeps its prompts, notes and raw logs in `.atex/runs/<id>/`, and saves notes and the result as `run::<id>::part_<n>` and `run::<id>::result`, which `atex_recall` can read later.
+
+While a run is going there is no interactive screen and no Remote Control, and nobody can answer the agent's questions. Follow a part with `tail -f` on its log. A cut has a cost: each new part spends calls finding its place again, so a short task costs less with no cuts at all. It needs a POSIX shell, so it does not run on Windows.
 
 `atex doctor` checks the wiring, and `atex uninstall` removes it. Run `/clear` between unrelated tasks. Recent state comes back automatically, and older turns stay available through `atex_recall` / `atex_search`.
 
