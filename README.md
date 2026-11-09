@@ -142,7 +142,7 @@ Results stay current. Folders registered with `atex init <folder>` are checked o
 
 | Set | Answer in first result: `atex_where` | Answer in first result: modeled grep | Characters: `atex_where` + one `atex_recall` | Characters: modeled grep | Characters: whole files |
 |---|---:|---:|---:|---:|---:|
-| Tuning set (22) | 11/22 | 10/22 | 31,737 | 36,558 | 783,582 |
+| Tuning set (22) | 11/22 | 10/22 | 31,737 | 36,558 | 783,591 |
 | Held-out set (10) | 0/10 | 1/10 | 20,942 | 16,414 | 371,443 |
 
 **Compared with reading whole files, this route uses at least 94% fewer characters. Compared with grep, the result is mixed:** 13% fewer on the tuning set and 28% more on the held-out set, with few answers in the first result on either route. Do not expect it to beat grep for finding things.
