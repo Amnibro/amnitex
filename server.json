@@ -7,13 +7,13 @@
     "source": "github"
   },
   "version_detail": {
-    "version": "0.3.6"
+    "version": "0.4.0"
   },
   "packages": [
     {
       "registry_name": "mcpb",
       "name": "https://github.com/Amnibro/amnitex/releases/latest/download/amnitex.mcpb",
-      "version": "0.3.6",
+      "version": "0.4.0",
       "runtime_hint": "native-helium",
       "package_arguments": [
         {

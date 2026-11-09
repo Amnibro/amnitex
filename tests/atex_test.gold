@@ -1,0 +1,336 @@
+use os
+use json
+into atex_test.amni
+
+```amni
+import os;
+import json;
+var BIN byte[>..];
+var T byte[>..];
+var FAILS = 0;
+var RUNS = 0;
+fn check(name const byte[:], ok bool) {
+	RUNS += 1;
+	if !ok {
+		FAILS += 1;
+		write_stdout(str("FAIL ", name, "\n")[..]);
+		flush_stdout();
+	}
+}
+fn has(s const byte[:], w const byte[:]) bool { find(s, w) >= 0 }
+fn quote(v const byte[:]) byte[>..] {
+	var o = str("'");
+	for c in v { if c == '\'' { o.append("'\\''"); } else { o.push(c); } }
+	o.push('\'');
+	o
+}
+fn js(s const byte[:]) byte[>..] {
+	var b byte[>..] = [];
+	json::format_string(b, s);
+	b
+}
+fn slurp(p const byte[:]) byte[>..] {
+	var b byte[>..] = [];
+	read_file(p, b);
+	b
+}
+fn mkdirs(p const byte[:]) { run_command(str("mkdir -p ", quote(p))[..]); }
+fn put(p const byte[:], data const byte[:]) {
+	let cut = rfind(p, "/");
+	if cut > 0 { mkdirs(p[..cut]); }
+	write_file(p, data);
+}
+fn at_home(home const byte[:], rest const byte[:]) int { run_command(str("HOME=", quote(home), " ", quote(BIN[..]), " ", rest, " > ", quote(str(T, "/last")), " 2>&1")[..]) }
+fn call_line(id int, name const byte[:], a const byte[:]) byte[>..] { str("{\"jsonrpc\":\"2.0\",\"id\":", id, ",\"method\":\"tools/call\",\"params\":{\"name\":\"", name, "\",\"arguments\":", a, "}}\n") }
+fn replies(raw const byte[:]) byte[>..][>..] {
+	var out byte[>..][>..] = [];
+	var d = json::Doc {};
+	for ln in split(raw, '\n') {
+		if ln.len == 0 { continue; }
+		let r, _ = json::parse(ln, d);
+		let t, _ = json::as_string(d, json::member(d, json::element(d, json::member(d, json::member(d, r, "result"), "content"), 0), "text"));
+		out.push(str(t));
+	}
+	out
+}
+fn rpc(kb const byte[:], body const byte[:]) byte[>..][>..] {
+	let rq = str(T, "/rq");
+	let rs = str(T, "/rs");
+	write_file(rq[..], body);
+	run_command(str(quote(BIN[..]), " serve --atex-dir ", quote(kb), " < ", quote(rq[..]), " > ", quote(rs[..]), " 2>/dev/null")[..]);
+	replies(slurp(rs[..])[..])
+}
+fn one(kb const byte[:], name const byte[:], a const byte[:]) byte[>..] {
+	let r = rpc(kb, call_line(1, name, a)[..]);
+	if r.len > 0 { copy(r[0]) } else { str("") }
+}
+fn where(kb const byte[:], q const byte[:], extra const byte[:]) byte[>..] { one(kb, "atex_where", str("{\"query\":", js(q), extra, "}")[..]) }
+fn page_used(kb const byte[:]) int {
+	var d = json::Doc {};
+	let r, _ = json::parse(slurp(str(kb, "/index.json")[..])[..], d);
+	let pg = json::member(d, r, "pages");
+	let u, _ = json::as_i64(d, json::member(d, json::element(d, pg, json::count(d, pg) - 1), "used_bytes"));
+	u
+}
+fn tree(root const byte[:]) {
+	put(str(root, "/src/pkg/auth.py")[..], "import os\ndef verify_token(t):\n    return TOKEN_LIMIT > 7\n");
+	put(str(root, "/src/pkg/db.py")[..], "POOL_SIZE = 8\ndef connect():\n    return POOL_SIZE\n");
+	put(str(root, "/src/README.md")[..], "# Project\n\nThe pool size is documented here for readers.\n");
+	mkdirs(str(root, "/home")[..]);
+	at_home(str(root, "/home")[..], str("init ", quote(str(root, "/src")), " --atex-dir ", quote(str(root, "/kb")))[..]);
+}
+fn test_tiers() {
+	let root = str(T, "/tiers");
+	tree(root[..]);
+	let kb = str(root, "/kb");
+	let a = where(kb[..], "POOL_SIZE", "");
+	check("where names file, lines, best line", has(a[..], "project::pkg/db.py 2:") && has(a[..], "POOL_SIZE = 8") && !has(a[..], "verify_token"));
+	let b = where(kb[..], "pool", ",\"path\":\"pkg/\"");
+	check("where filters by folder", has(b[..], "project::pkg/db.py") && !has(b[..], "README"));
+	check("where rolls up extra files", has(where(kb[..], "pool", ",\"k\":1")[..], "more files"));
+	check("identifier does not match on parts", !has(a[..], "README"));
+	check("missing identifier is labeled", has(where(kb[..], "POOL_LIMIT", "")[..], "no exact match for POOL_LIMIT"));
+	let c = one(kb[..], "atex_recall", "{\"key\":\"project::pkg/auth.py\",\"query\":\"TOKEN_LIMIT\"}");
+	check("recall with query returns matching lines", has(c[..], "TOKEN_LIMIT > 7") && has(c[..], "L2-3"));
+	check("recall with no match says so", has(one(kb[..], "atex_recall", "{\"key\":\"project::pkg/auth.py\",\"query\":\"POOL_SIZE\"}")[..], "has no matching lines"));
+	let before = page_used(kb[..]);
+	sleep_ms(3000);
+	at_home(str(root, "/home")[..], str("init ", quote(str(root, "/src")), " --atex-dir ", quote(kb[..]))[..]);
+	check("init of an unchanged tree adds nothing", page_used(kb[..]) == before);
+}
+fn test_fresh() {
+	let root = str(T, "/fresh");
+	tree(root[..]);
+	let kb = str(root, "/kb");
+	let db = str(root, "/src/pkg/db.py");
+	run_command(str("cp -p ", quote(db[..]), " ", quote(str(root, "/stamp")))[..]);
+	write_file(db[..], "POOL_SIZE = 9\ndef connect():\n    return POOL_SIZE\n");
+	run_command(str("touch -r ", quote(str(root, "/stamp")), " ", quote(db[..]))[..]);
+	check("same-second edit of equal size is seen", has(one(kb[..], "atex_recall", "{\"key\":\"project::pkg/db.py\",\"query\":\"POOL_SIZE\"}")[..], "POOL_SIZE = 9"));
+	write_file(db[..], "RENAMED_POOL = 8\n");
+	write_file(str(root, "/src/pkg/new.py")[..], "FRESH_SYMBOL = 1\n");
+	delete_file(str(root, "/src/pkg/auth.py")[..]);
+	check("edit is seen", has(where(kb[..], "RENAMED_POOL", "")[..], "project::pkg/db.py"));
+	check("new file is seen", has(where(kb[..], "FRESH_SYMBOL", "")[..], "project::pkg/new.py"));
+	check("deleted file is gone from recall", has(one(kb[..], "atex_recall", "{\"key\":\"project::pkg/auth.py\"}")[..], "(not found)"));
+	check("deleted file is gone from keys", !has(one(kb[..], "atex_list_keys", "{\"prefix\":\"project::\"}")[..], "project::pkg/auth.py"));
+	var body byte[>..] = [];
+	for i in 0..40 { body.append("CONCURRENT_EDIT = 1\n"); }
+	let before = page_used(kb[..]);
+	write_file(db[..], body[..]);
+	let rq = str(root, "/rq");
+	write_file(rq[..], call_line(1, "atex_where", "{\"query\":\"CONCURRENT_EDIT\"}")[..]);
+	var cmd byte[>..] = [];
+	for i in 0..7 { cmd.append(str(quote(BIN[..]), " serve --atex-dir ", quote(kb[..]), " < ", quote(rq[..]), " > ", quote(str(root, "/o", i)), " 2>/dev/null & ")[..]); }
+	cmd.append("wait");
+	run_command(cmd[..]);
+	var seen = 0;
+	for i in 0..7 { if has(slurp(str(root, "/o", i)[..])[..], "project::pkg/db.py") { seen += 1; } }
+	check("seven servers all see one edit", seen == 7);
+	check("seven servers index one edit once", page_used(kb[..]) - before == body.len);
+	check("no lock is left behind", !file_exists(str(kb, "/write.lock")));
+	let hm = str(root, "/homeroot");
+	mkdirs(hm[..]);
+	at_home(hm[..], str("init ", quote(hm[..]), " --atex-dir ", quote(str(root, "/kb2")))[..]);
+	var d = json::Doc {};
+	let r, _ = json::parse(slurp(str(root, "/kb2/index.json")[..])[..], d);
+	check("home folder is not registered", json::count(d, json::member(d, r, "roots")) == 0);
+}
+fn test_shared() {
+	let root = str(T, "/shared");
+	let kb = str(root, "/kb");
+	mkdirs(root[..]);
+	check("selftest passes", run_command(str(quote(BIN[..]), " --selftest > /dev/null 2>&1")[..]) == 0);
+	var cmd byte[>..] = [];
+	for i in 0..7 {
+		let rq = str(root, "/r", i);
+		write_file(rq[..], call_line(1, "atex_remember", str("{\"key\":\"nat", i, "\",\"text\":\"native text ", i, "\"}")[..])[..]);
+		cmd.append(str(quote(BIN[..]), " serve --atex-dir ", quote(kb[..]), " < ", quote(rq[..]), " > /dev/null 2>&1 & ")[..]);
+	}
+	cmd.append("wait");
+	run_command(cmd[..]);
+	var intact = 0;
+	for i in 0..7 { if has(one(kb[..], "atex_recall", str("{\"key\":\"manual::nat", i, "\"}")[..])[..], str("native text ", i)[..]) { intact += 1; } }
+	check("seven concurrent writers all survive", intact == 7);
+	var hooks byte[>..] = [];
+	for i in 0..7 {
+		let tp = str(root, "/t", i, ".jsonl");
+		write_file(tp[..], str("{\"type\":\"user\",\"message\":{\"content\":\"prompt number ", i, "\"}}\n{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"reply number ", i, "\"}]}}\n")[..]);
+		let inp = str(root, "/h", i);
+		write_file(inp[..], str("{\"transcript_path\":", js(tp[..]), ",\"cwd\":\"/proj/shared\"}")[..]);
+		hooks.append(str(quote(BIN[..]), " hook stop --atex-dir ", quote(kb[..]), " < ", quote(inp[..]), " > /dev/null 2>&1 & ")[..]);
+	}
+	hooks.append("wait");
+	run_command(hooks[..]);
+	let ks = one(kb[..], "atex_list_keys", "{\"prefix\":\"conv::\"}");
+	var turns = 0;
+	for ln in split(ks[..], '\n') { if has(ln, "turn_") && !has(ln, "latest") { turns += 1; } }
+	check("seven concurrent stop hooks all save", turns == 7);
+	let two = rpc(kb[..], str(call_line(1, "atex_remember", "{\"key\":\"foo\",\"text\":\"first zebra fact\"}"), call_line(2, "atex_search", "{\"query\":\"zebra\"}"), call_line(3, "atex_remember", "{\"key\":\"foo\",\"text\":\"second giraffe note\"}"), call_line(4, "atex_search", "{\"query\":\"zebra\"}"))[..]);
+	check("search forgets overwritten text", two.len == 4 && !has(two[3][..], "giraffe"));
+	mkdirs(str(kb, "/write.lock")[..]);
+	write_file(str(kb, "/write.lock/owner")[..], "atex");
+	run_command(str("touch -d '2 minutes ago' ", quote(str(kb, "/write.lock/owner")))[..]);
+	check("a crashed writer's lock is recovered", has(one(kb[..], "atex_remember", "{\"key\":\"after_crash\",\"text\":\"alive\"}")[..], "after_crash") && !file_exists(str(kb, "/write.lock")));
+	let bad = str(root, "/bad");
+	mkdirs(bad[..]);
+	write_file(str(bad, "/index.json")[..], "not json");
+	check("a corrupt index fails by exit code", run_command(str(quote(BIN[..]), " stats --atex-dir ", quote(bad[..]), " > /dev/null 2>&1")[..]) != 0);
+}
+fn test_cursor() {
+	let root = str(T, "/cursor");
+	var body = str("head\n");
+	for i in 0..400 { body.append("lorem "); }
+	body.append("\nCONSTRAINT: keep NATIVE_NONCE_4455 exact.\n");
+	let notes = str(root, "/src/notes.txt");
+	put(notes[..], body[..]);
+	let kb = str(root, "/kb");
+	run_command(str(quote(BIN[..]), " init ", quote(str(root, "/src")), " --atex-dir ", quote(kb[..]), " > /dev/null 2>&1")[..]);
+	let inp = str(root, "/in");
+	write_file(inp[..], str("{\"hook_event_name\":\"preToolUse\",\"conversation_id\":\"native-1\",\"tool_name\":\"Read\",\"tool_input\":{\"path\":", js(notes[..]), "}}")[..]);
+	let out = str(root, "/out");
+	run_command(str(quote(BIN[..]), " hook cursor --atex-dir ", quote(kb[..]), " < ", quote(inp[..]), " > ", quote(out[..]))[..]);
+	var d = json::Doc {};
+	let r, _ = json::parse(slurp(out[..])[..], d);
+	let perm, _ = json::as_string(d, json::member(d, r, "permission"));
+	let msg, _ = json::as_string(d, json::member(d, r, "agent_message"));
+	check("large Cursor read is replaced by an excerpt", perm == "deny" && has(msg, "NATIVE_NONCE_4455") && msg.len < body.len);
+	write_file(inp[..], "{\"hook_event_name\":\"beforeSubmitPrompt\",\"prompt\":\"x\"}");
+	run_command(str(quote(BIN[..]), " hook cursor --atex-dir ", quote(kb[..]), " < ", quote(inp[..]), " > ", quote(out[..]))[..]);
+	check("Cursor prompts are left alone", has(slurp(out[..])[..], "\"continue\":true") || has(slurp(out[..])[..], "\"continue\": true"));
+}
+fn test_tool_hook() {
+	let root = str(T, "/tool");
+	let tp = str(root, "/proj/sess1.jsonl");
+	mkdirs(str(root, "/proj")[..]);
+	let kb = str(root, "/kb");
+	var so byte[>..] = [];
+	for i in 1..3001 { if i == 1500 { so.append("1500 ERROR: something broke here\n"); } else { so.append(str(i, "\n")[..]); } }
+	let inp = str(root, "/in");
+	let out = str(root, "/out");
+	let run = str(quote(BIN[..]), " hook tool --atex-dir ", quote(kb[..]), " < ", quote(inp[..]), " > ", quote(out[..]));
+	write_file(inp[..], str("{\"session_id\":\"sess1\",\"transcript_path\":", js(tp[..]), ",\"tool_name\":\"Bash\",\"tool_use_id\":\"toolu_abc\",\"tool_input\":{\"command\":\"seq 1 3000\"},\"tool_response\":{\"stdout\":", js(so[..]), ",\"stderr\":\"\",\"interrupted\":false,\"isImage\":false,\"extraField\":7}}")[..]);
+	run_command(run[..]);
+	var d = json::Doc {};
+	let r, _ = json::parse(slurp(out[..])[..], d);
+	let upd = json::member(d, json::member(d, r, "hookSpecificOutput"), "updatedToolOutput");
+	let s2, _ = json::as_string(d, json::member(d, upd, "stdout"));
+	let saved = str(root, "/proj/sess1/tool-results/atex-toolu_abc.txt");
+	check("long Bash output is shortened", s2.len <= 4200 && s2.len > 0);
+	check("the note names the saved file", has(s2, saved[..]));
+	check("the error line in the middle is kept", has(s2, "1500 ERROR: something broke here"));
+	check("the head and tail are kept", starts_with(s2, "1\n2\n") && has(s2, "\n3000\n"));
+	check("other output fields are kept", json::member(d, upd, "extraField") >= 0 && json::member(d, upd, "interrupted") >= 0);
+	check("the full output is saved", slurp(saved[..]) == so);
+	write_file(inp[..], "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"ls\"},\"tool_response\":{\"stdout\":\"small\",\"stderr\":\"\"}}");
+	run_command(run[..]);
+	check("small output is left alone", slurp(out[..]).len == 0);
+	write_file(inp[..], str("{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":", js(str("sed -n 1,3000p ", saved)[..]), "},\"tool_response\":{\"stdout\":", js(so[..]), ",\"stderr\":\"\"}}")[..]);
+	run_command(run[..]);
+	check("reading the saved file back is not shortened again", slurp(out[..]).len == 0);
+	write_file(inp[..], str("{\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\"/x\"},\"tool_response\":{\"stdout\":", js(so[..]), "}}")[..]);
+	run_command(run[..]);
+	check("other tools are left alone", slurp(out[..]).len == 0);
+	write_file(inp[..], str("{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"seq\"},\"tool_response\":{\"stdout\":", js(so[..]), ",\"stderr\":\"\"}}")[..]);
+	run_command(str("ATEX_TOOL_CAP=0 ", run)[..]);
+	check("the cap can be turned off", slurp(out[..]).len == 0);
+	run_command(run[..]);
+	check("no transcript falls back to the knowledge base", has(slurp(out[..])[..], str(kb, "/out/atex-")[..]));
+}
+fn test_install() {
+	let root = str(T, "/install");
+	let hm = str(root, "/home");
+	let kb = str(root, "/kb");
+	let set = str(hm, "/.claude/settings.json");
+	put(set[..], "{\n  \"model\": \"opus\",\n  \"env\": {\"KEEP_ME\": \"1\", \"N\": 7},\n  \"hooks\": {\n    \"Stop\": [{\"hooks\": [{\"type\": \"command\", \"command\": \"other-tool done\"}, {\"type\": \"command\", \"command\": \"'/old/atex' hook stop --atex-dir '/old/kb'\"}]}],\n    \"SessionStart\": [{\"matcher\": \"clear|compact\", \"hooks\": [{\"type\": \"command\", \"command\": \"'/old/atex' hook start --atex-dir '/old/kb'\"}]}],\n    \"PreToolUse\": [{\"matcher\": \"Edit\", \"hooks\": [{\"type\": \"command\", \"command\": \"lint-it\"}]}]\n  },\n  \"permissions\": {\"allow\": [\"Bash(ls:*)\"]}\n}\n");
+	put(str(hm, "/.claude.json")[..], "{\"mcpServers\":{\"other\":{\"command\":\"x\"}},\"numStartups\":7}\n");
+	mkdirs(str(hm, "/.cursor")[..]);
+	let ins = str("install --atex-dir ", quote(kb[..]));
+	check("install succeeds", at_home(hm[..], ins[..]) == 0);
+	let s1 = slurp(set[..]);
+	var d = json::Doc {};
+	let r, _ = json::parse(s1[..], d);
+	check("settings stay valid JSON", r >= 0);
+	let w, _ = json::as_string(d, json::member(d, json::member(d, r, "env"), "CLAUDE_CODE_AUTO_COMPACT_WINDOW"));
+	check("the compact window is set", w == "283000");
+	check("unrelated settings survive", has(s1[..], "KEEP_ME") && has(s1[..], "other-tool done") && has(s1[..], "lint-it") && has(s1[..], "Bash(ls:*)") && has(s1[..], "\"model\""));
+	check("old atex hooks are replaced", !has(s1[..], "/old/kb") && has(s1[..], " hook stop --atex-dir") && has(s1[..], " hook start --atex-dir") && has(s1[..], " hook tool --atex-dir"));
+	check("doctor passes", at_home(hm[..], "doctor") == 0);
+	check("doctor reports one knowledge base", has(slurp(str(T, "/last")[..])[..], "ok one knowledge base"));
+	at_home(hm[..], ins[..]);
+	check("install twice changes nothing", slurp(set[..]) == s1);
+	at_home(hm[..], str(ins, " --no-compact-window")[..]);
+	check("the compact window can be turned off", !has(slurp(set[..])[..], "CLAUDE_CODE_AUTO_COMPACT_WINDOW"));
+	let own = str(root, "/own.json");
+	put(own[..], "{\"env\":{\"CLAUDE_CODE_AUTO_COMPACT_WINDOW\":\"400000\"}}");
+	run_command(str("cp ", quote(own[..]), " ", quote(set[..]))[..]);
+	at_home(hm[..], ins[..]);
+	check("a window you set yourself is kept", has(slurp(set[..])[..], "400000") && !has(slurp(set[..])[..], "283000"));
+	at_home(hm[..], "uninstall");
+	let s2 = slurp(set[..]);
+	check("uninstall removes the hooks", !has(s2[..], " hook stop") && !has(s2[..], " hook tool"));
+	check("uninstall keeps a window you set yourself", has(s2[..], "400000"));
+	check("uninstall removes the MCP server only", !has(slurp(str(hm, "/.claude.json")[..])[..], "amnitex") && has(slurp(str(hm, "/.claude.json")[..])[..], "other"));
+	check("uninstall removes Cursor files", !file_exists(str(hm, "/.cursor/hooks/atex-cursor")) && !file_exists(str(hm, "/.cursor/rules/amnitex.mdc")));
+	check("doctor fails after uninstall", at_home(hm[..], "doctor") != 0);
+	let bad = str(root, "/badhome");
+	put(str(bad, "/.claude/settings.json")[..], "{ not json");
+	at_home(bad[..], ins[..]);
+	check("broken settings are left unchanged", slurp(str(bad, "/.claude/settings.json")[..]) == "{ not json");
+}
+fn test_replay() {
+	let root = str(T, "/replay");
+	let dir = str(root, "/projects/p");
+	mkdirs(dir[..]);
+	var t byte[>..] = [];
+	var ctx = 60000;
+	for i in 0..400 {
+		t.append(str("{\"type\":\"assistant\",\"message\":{\"id\":\"m", i, "\",\"usage\":{\"input_tokens\":1,\"cache_read_input_tokens\":", ctx, ",\"cache_creation_input_tokens\":0,\"output_tokens\":7},\"content\":[{\"type\":\"tool_use\",\"id\":\"t", i, "\",\"name\":\"Bash\",\"input\":{\"command\":\"x\"}}]}}\n")[..]);
+		var body byte[>..] = [];
+		body.resize(20000, 'x');
+		t.append(str("{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"t", i, "\",\"content\":\"", body, "\"}]}}\n")[..]);
+		ctx += 7000;
+	}
+	write_file(str(dir, "/s.jsonl")[..], t[..]);
+	let hm = str(root, "/home");
+	mkdirs(hm[..]);
+	check("replay runs", at_home(hm[..], str("replay ", quote(str(root, "/projects")))[..]) == 0);
+	let o = slurp(str(T, "/last")[..]);
+	check("replay finds the session", has(o[..], "sessions=1") && has(o[..], "calls=400"));
+	check("replay lists the settings", has(o[..], "compact at 250K") && has(o[..], "cap Bash 2K") && has(o[..], "fresh turn"));
+	check("replay creates no knowledge base", !is_dir(str(hm, "/.atex")));
+	check("replay reports a missing folder", at_home(hm[..], str("replay ", quote(str(root, "/nope")))[..]) != 0);
+}
+fn test_versions(repo const byte[:]) {
+	run_command(str(quote(BIN[..]), " --version > ", quote(str(T, "/v")))[..]);
+	let line = slurp(str(T, "/v")[..]);
+	let parts = split(line[..], ' ');
+	let v = if parts.len > 1 { str(parts[1]) } else { str("?") };
+	for f in ["gemini-extension.json", "manifest.json", "plugin.json", "server.json", ".claude-plugin/plugin.json", ".claude-plugin/marketplace.json", ".grok-plugin/plugin.json", ".grok-plugin/marketplace.json", ".codex-plugin/plugin.json", ".cursor-plugin/plugin.json"] {
+		check(str("version in ", f)[..], has(slurp(str(repo, "/", f)[..])[..], str("\"", v, "\"")[..]));
+	}
+	check("no Python is left in the repository", run_command(str("cd ", quote(repo), " && ! git ls-files | grep -q -E '\\.py$|pyproject'")[..]) == 0);
+}
+fn main() {
+	let av = args();
+	if av.len < 3 {
+		write_stderr("usage: atex_test <atex binary> <repository folder>\n");
+		exit(2);
+	}
+	BIN.append(av[1]);
+	T.append(str("/tmp/atex-test-", time_ns()));
+	mkdirs(T[..]);
+	test_tiers();
+	test_fresh();
+	test_shared();
+	test_cursor();
+	test_tool_hook();
+	test_install();
+	test_replay();
+	test_versions(av[2]);
+	run_command(str("rm -rf ", quote(T[..]))[..]);
+	write_stdout(str(RUNS - FAILS, " of ", RUNS, " checks passed\n")[..]);
+	flush_stdout();
+	exit(if FAILS == 0 { 0 } else { 1 });
+}
+```

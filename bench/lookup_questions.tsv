@@ -16,8 +16,8 @@ is the lossy summary recall measured or modeled	modeled rule	README.md
 tokens assumed per raw turn in the conversation benchmark	raw_turn_tok	bench_conv_lut.gold
 backoff interval for rpc_reconnect_loop	RETRY_BACKOFF_17MS	bench_conv_lut.gold
 supervisor angel heartbeat health pulses	CRON_HEARTBEAT_SEC_45	bench_conv_lut.gold
-default ollama server url	http://localhost:11434	atex/clients/ollama.py
-python keyword retriever key score	key_score	atex/retriever.py
-minimum python version	requires-python = ">=3.10"	pyproject.toml
+how long before an abandoned write lock counts as stale	LOCK_STALE_S = 30	atex_serve.gold
+default number of characters returned per lookup	DEF_MC = 600	atex_serve.gold
+which events the Cursor hook is installed on	beforeReadFile	atex_serve.gold
 dogfood honest caveats	## Honest caveats	DOGFOOD.md
 changelog 0.2.1 release	## [0.2.1]	CHANGELOG.md

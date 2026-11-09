@@ -1,4 +1,4 @@
-# atex (amni-tex) — Native Gold/Helium Edition (v0.3.6)
+# atex (amni-tex) — Native Gold/Helium Edition (v0.4.0)
 
 **A lossless local byte-page memory layer for MCP-capable AI coding assistants. It also stores every conversation turn so earlier facts can be recalled exactly.**
 Written in [Gold](https://github.com/Amnibro/gold) and compiled to native [Helium](https://github.com/Amnibro/helium). Local. No embeddings. No cloud. MIT-licensed. Exact-match nonce lookup through an RGBA texture LUT (`index.tex`): a 15 MB knowledge base loads in 22 ms.
@@ -48,7 +48,8 @@ Every AI coding assistant either forgets your project at session boundaries or r
 
 `atex` targets both problems with a single native Helium binary (`atex_serve.gold` $\rightarrow$ `atex`):
 1. **Lossless Byte-Page Store + 2D Spatial `TexGrid`:** Stores project docs, code symbols, and user-taught facts (`manual::*`) in 1 MiB byte-pages (`ATEXKB01`) indexed by a 64-bit FNV-1a 2D spatial texture grid (`TexGrid`). Subword and snake_case tokens are indexed automatically.
-2. **Conversation turn store (`conv::*`):** Saves every completed turn into `.atex` (`conv::<id>::turn_<N>` and `conv::latest_state`). Prior turns can be pulled back by keyword through the nonce LUT, without loss. The longer-term goal is a "fresh-turn" client that sends only a small fixed window each turn and recalls the rest from atex. **No current assistant client works this way yet**, so the token figures below are projections, not measured savings.
+2. **Conversation turn store (`conv::*`):** Saves every completed turn into `.atex` (`conv::<id>::turn_<N>` and `conv::latest_state`). Prior turns can be pulled back by keyword through the nonce LUT, without loss.
+3. **Bounded context in Claude Code:** Compacts sooner, restores state afterward, and keeps long Bash output on disk with a pointer in context.
 
 ## Numbers
 
@@ -72,16 +73,27 @@ Reproducible via `./bench_conv_lut_bin` (`bench_conv_lut.gold`, 200 simulated tu
 - **Exact fact recall at turn 200:** `20/20` measured from the atex store (keyword-overlap queries). The `2/20` for lossy summaries is modeled, not measured
 - Interactive charts & full writeup: **[amni-scient.com/amnitex-lut.html](https://amni-scient.com/amnitex-lut.html)**
 
-### Replay of real sessions
+### What real sessions would save (v0.4.0)
 
-The table above is a simulation. To check the idea against real work, we replayed the token usage logged by 20 long Claude Code sessions and modeled what each API call would have sent:
+The table above is a simulation with assumed token counts, and real sessions save far less. `atex replay` reads the usage Claude Code logged for each request in your own sessions and models what each setting would have sent, with prompt-cache prices included. It makes no model calls, so it costs nothing to run.
 
-| What is cleared | Input saved | If each fresh turn also re-reads 30K tokens |
+Here it is on one person's 20 most recent long sessions (66,241 requests, 18.5B input tokens):
+
+| Setting | Input saved | Cost saved |
 |---|---:|---:|
-| Earlier turns, replaced by a 1.1K-token state card | 41% | 31% |
-| Earlier turns, plus all but the last 3 tool results inside a turn | 61% | 50% |
+| **Compact at 250K tokens** (`atex install` sets this) | 36.6% | 21.2% |
+| **That, plus long Bash output kept on disk** (`atex install` adds this) | 36.8% | 22.2% |
+| Clear every turn, then re-read 10K to 30K tokens (not shipped) | 24.3% to 27.3% | 12.5% to 18.9% |
+| Compact, Bash output on disk, and clear every turn (not shipped) | 43.9% to 46.3% | 24.3% to 30.4% |
+| Clear old tool results through the API (not shipped) | 18.7% | **−25.3%** |
 
-These are modeled, not live runs, and the session logs are private, so they cannot be reproduced from this repository. Most of those tokens were already prompt-cache reads, so a bill would fall by a different amount. Long changes grow inside a single turn as well as across turns, so clearing only between turns leaves much of the cost in place. Today, clearing depends on the client: in Claude Code, run `/clear`; hooks cannot remove earlier messages on their own.
+How to read this:
+
+- **It is a model, not a live run, and these logs are private.** Run `atex replay` to see your own numbers. It does not measure whether compacting sooner makes the assistant redo work, and it assumes 30% of hidden Bash output gets read back.
+- **Cost** counts input only and uses Claude Opus 5.5 ratios: cache reads at 0.05×, 1-hour cache writes at 2× (what these sessions used), and an 8K-token summary at 5× per compaction. Subscription limits are not published, so your limit may move differently.
+- **Compacting sooner keeps context bounded**, so each request stops growing with session length. Claude Code compacts about 33K tokens before its window, so `atex install` sets the window to 283,000.
+- **Clearing old tool results through the API costs more** because each clear rewrites the prompt cache at the 2× price, while keeping the results costs only 0.05× per read.
+- **Clearing every turn is not shipped.** Claude Code hooks cannot drop earlier messages, so it needs a proxy in front of every request. That turns off Remote Control and adds only 2 to 8 points of cost saving. Running `/clear` yourself between unrelated tasks is still the cheapest move, and atex restores your recent state afterward.
 
 ### Nonce texture LUT (v0.3.3)
 
@@ -130,19 +142,23 @@ Results stay current. Folders registered with `atex init <folder>` are checked o
 
 | Set | Answer in first result: `atex_where` | Answer in first result: modeled grep | Characters: `atex_where` + one `atex_recall` | Characters: modeled grep | Characters: whole files |
 |---|---:|---:|---:|---:|---:|
-| Tuning set (22) | 14/22 | 9/22 | 23,346 | 47,123 | 641,088 |
-| Held-out set (10) | 4/10 | 3/10 | 14,837 | 16,424 | 199,406 |
+| Tuning set (22) | 11/22 | 10/22 | 31,491 | 36,129 | 781,335 |
+| Held-out set (10) | 0/10 | 1/10 | 20,877 | 16,412 | 371,443 |
 
-`atex bench` models grep generously: it picks the rarest word in the question and shows up to 30 matching lines. Either route falls back to a 41-line read at the right spot when the answer has not appeared yet. No live agent is involved and the sets are small, so treat the held-out row as the fairer guide. Results: [`bench/tier_tuning_results.json`](bench/tier_tuning_results.json), [`bench/tier_heldout_results.json`](bench/tier_heldout_results.json).
+**Compared with reading whole files, this route uses about 94% fewer characters. Compared with grep, the result is mixed:** 13% fewer on the tuning set and 27% more on the held-out set, with few answers in the first result on either route. Do not expect it to beat grep for finding things.
 
-### Claude Code turn hooks
+`atex bench` models grep generously: it picks the rarest word in the question and shows up to 30 matching lines. Either route falls back to a 41-line read at the right spot when the answer has not appeared yet. No live agent is involved and the sets are small, so treat the held-out row as the fairer guide. In v0.4.0, six questions about the removed Python code were replaced with new questions about `atex_serve.gold`, so these numbers are not comparable with v0.3.6. Results: [`bench/tier_tuning_results.json`](bench/tier_tuning_results.json), [`bench/tier_heldout_results.json`](bench/tier_heldout_results.json).
 
-`atex install` (or the Claude Code plugin's `hooks/hooks.json`) adds:
+### Claude Code hooks and settings
+
+`atex install` adds these to `~/.claude/settings.json`, keeping everything else there and saving the old file as `settings.json.atex-backup`. The Claude Code plugin's `hooks/hooks.json` adds the same hooks, but not the compact setting.
 
 - **Stop** → `atex hook stop` saves the turn's prompt, final reply and touched files as `conv::<project>::turn_<N>`, and refreshes `conv::<project>::latest_state`.
 - **SessionStart** (on `/clear` or compaction) → `atex hook start` injects `latest_state`, about 1.1K tokens holding the last three turns.
+- **PostToolUse** (Bash) → `atex hook tool` keeps a long output on disk. The assistant sees the start, the end, and any error lines, plus a note with the path to the full output. Nothing in the conversation is edited later, so the prompt cache stays valid. Set `ATEX_TOOL_CAP` to change the limit (default 4,200 characters, about 2K tokens), or to `0` to turn this off.
+- **`CLAUDE_CODE_AUTO_COMPACT_WINDOW=283000`** → compacts at about 250K tokens. A value you already set is kept. Turn it off with `atex install --no-compact-window`.
 
-Run `/clear` whenever the context gets heavy. Recent state comes back automatically, and older turns stay available through `atex_recall` / `atex_search`.
+`atex doctor` checks the wiring, and `atex uninstall` removes it. Run `/clear` between unrelated tasks. Recent state comes back automatically, and older turns stay available through `atex_recall` / `atex_search`.
 
 ### Scale-validated retrieval (v0.2.0 spatial tex-grid)
 
@@ -187,6 +203,8 @@ Replay: `atex bench`. Full numbers in [`bench_results.md`](bench_results.md), so
 
 ## Validated end-to-end with a 0.5B open-source model
 
+This was run with the Python client, which was removed in v0.4.0. It is kept here as a record of that result, and the `atex demo` command no longer exists.
+
 ```
 $ ollama pull qwen2.5:0.5b-instruct
 $ atex demo --model qwen2.5:0.5b-instruct
@@ -216,12 +234,11 @@ The 0.5B model retrieved the validation cookie out of the seeded `atex` knowledg
 | Tool                          | Use when |
 |-------------------------------|-----|
 | `atex_search(query, k, max_chars, page, exact)` | Look something up before asking you to re-explain it; `page` walks the full match list, `exact=true` scans raw text |
-| `atex_recall(key, max_chars, lines)` | Exact key lookup, e.g. `project::src/auth.ts`; `lines="a-b"` returns a line range |
+| `atex_recall(key, max_chars, lines, query)` | Exact key lookup, e.g. `project::src/auth.ts`; `lines="a-b"` returns a line range, `query` returns only the matching lines |
 | `atex_remember(key, text)`    | You explicitly tell it "remember that X" |
 | `atex_list_keys(prefix, max)` | Discover what is known about an area |
 | `atex_stats()`                | Inspect KB size / fill |
 | `atex_where(query, k, path)`  | Find which files hold something: file keys, line numbers, one best line each |
-| `atex_recall(key, query)`     | Only the lines in one entry that match |
 
 Server-side validation: `atex_remember` keys must match `^[a-zA-Z0-9_\-./:(),'—]{1,256}$`, must not contain `..`, text payload capped at 1 MiB.
 
@@ -242,12 +259,13 @@ Lossless byte-page key-value store. Pages are mem-mappable; the index is JSON. N
 
 ```bash
 git clone https://github.com/Amnibro/amnitex
-cd atex
-pip install -e ".[dev]"
-pytest                                                    # 31 tests pass in ~6 s
-python -m atex.cli bench --out bench.json --md bench.md   # bench numbers above
-ollama pull qwen2.5:0.5b-instruct
-atex demo --model qwen2.5:0.5b-instruct                   # live RAG validation
+cd amnitex
+sh scripts/build-native.sh ./atex-bin                       # build the native binary
+HC_LIB=.helium/hc/lib .helium/build/hc build tests/atex_test.amni -o ./atex-test
+./atex-test ./atex-bin .                                    # the Gold test suite
+./atex-bin init . --atex-dir ./kb
+./atex-bin bench bench/lookup_heldout.tsv --atex-dir ./kb   # lookup numbers above
+./atex-bin replay                                           # your own Claude Code sessions
 ```
 
 ## Paper

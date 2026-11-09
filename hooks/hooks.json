@@ -1,6 +1,7 @@
 {
   "hooks": {
     "Stop": [{"hooks": [{"type": "command", "command": "atex hook stop"}]}],
-    "SessionStart": [{"matcher": "clear|compact", "hooks": [{"type": "command", "command": "atex hook start"}]}]
+    "SessionStart": [{"matcher": "clear|compact", "hooks": [{"type": "command", "command": "atex hook start"}]}],
+    "PostToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "atex hook tool"}]}]
   }
 }

@@ -1088,6 +1088,514 @@ fn json_str(s const byte[:]) byte[>..] {
 	json::format_string(b, s);
 	b
 }
+var NO_WINDOW = false;
+fn window_key() const byte[:] { "CLAUDE_CODE_AUTO_COMPACT_WINDOW" }
+fn window_val() const byte[:] { "283000" }
+fn cursor_events() byte[>..][>..] {
+	var e byte[>..][>..] = [];
+	for n in ["sessionStart", "stop", "beforeSubmitPrompt", "preCompact", "preToolUse", "beforeReadFile", "postToolUse"] { e.push(str(n)); }
+	e
+}
+fn je_nl(out byte[>..]&, ind int) {
+	if ind >= 0 {
+		out.push('\n');
+		for i in 0..ind { out.append("  "); }
+	}
+}
+fn je_emit(d json::Doc&, n int, out byte[>..]&, ind int) {
+	let k = json::kind(d, n);
+	if k == 5 || k == json::K_OBJ {
+		out.push(if k == 5 { '[' } else { '{' });
+		let deep = if ind >= 0 { ind + 1 } else { -1 };
+		var any = false;
+		var c = d.nodes[n].first;
+		while c >= 0 {
+			if any { out.push(','); }
+			any = true;
+			je_nl(out, deep);
+			if k != 5 {
+				out.append(json_str(json::name_of(d, c))[..]);
+				out.append(if ind >= 0 { ": " } else { ":" });
+			}
+			je_emit(d, c, out, deep);
+			c = d.nodes[c].next;
+		}
+		if any { je_nl(out, ind); }
+		out.push(if k == 5 { ']' } else { '}' });
+	} else if k == 4 {
+		let s, _ = json::as_string(d, n);
+		out.append(json_str(s)[..]);
+	} else if k == 2 { out.append(str(d.nodes[n].whole)[..]); }
+	else if k == 3 { json::format_number(out, d.nodes[n].num); }
+	else if k == 1 { out.append(if d.nodes[n].whole == 1 { "true" } else { "false" }); }
+	else { out.append("null"); }
+}
+fn is_atex_hook(cmd const byte[:]) bool { find(cmd, "atex-cursor") >= 0 || (find(cmd, "atex") >= 0 && (find(cmd, " hook stop") >= 0 || find(cmd, " hook start") >= 0 || find(cmd, " hook tool") >= 0)) }
+fn hooks_merged(d json::Doc&, hn int, rows const byte[>..][:]) byte[>..] {
+	var o = str("{");
+	var any = false;
+	var done bool[>..] = [];
+	for i in 0..rows.len { done.push(false); }
+	var c = if hn >= 0 { d.nodes[hn].first } else { -1 };
+	while c >= 0 {
+		let evn = json::name_of(d, c);
+		var arr = str("[");
+		var n = 0;
+		var g = if json::kind(d, c) == 5 { d.nodes[c].first } else { -1 };
+		while g >= 0 {
+			let own, oko = json::as_string(d, json::member(d, g, "command"));
+			let hs = json::member(d, g, "hooks");
+			var kept = str("[");
+			var nk = 0;
+			var dropped = 0;
+			var h = if hs >= 0 { d.nodes[hs].first } else { -1 };
+			while h >= 0 {
+				let cmd, _ = json::as_string(d, json::member(d, h, "command"));
+				if is_atex_hook(cmd) { dropped += 1; } else {
+					if nk > 0 { kept.push(','); }
+					je_emit(d, h, kept, -1);
+					nk += 1;
+				}
+				h = d.nodes[h].next;
+			}
+			kept.push(']');
+			if !(oko && is_atex_hook(own)) {
+				if dropped == 0 {
+					if n > 0 { arr.push(','); }
+					je_emit(d, g, arr, -1);
+					n += 1;
+				} else if nk > 0 {
+					if n > 0 { arr.push(','); }
+					arr.push('{');
+					var m = d.nodes[g].first;
+					var sep = false;
+					while m >= 0 {
+						if sep { arr.push(','); }
+						sep = true;
+						arr.append(json_str(json::name_of(d, m))[..]);
+						arr.push(':');
+						if json::name_of(d, m) == "hooks" { arr.append(kept[..]); } else { je_emit(d, m, arr, -1); }
+						m = d.nodes[m].next;
+					}
+					arr.push('}');
+					n += 1;
+				}
+			}
+			g = d.nodes[g].next;
+		}
+		var i = 0;
+		while i < rows.len {
+			if rows[i][..] == evn {
+				if n > 0 { arr.push(','); }
+				arr.append(rows[i + 1][..]);
+				n += 1;
+				done[i] = true;
+			}
+			i += 2;
+		}
+		arr.push(']');
+		if n > 0 {
+			if any { o.push(','); }
+			any = true;
+			o.append(json_str(evn)[..]);
+			o.push(':');
+			o.append(arr[..]);
+		}
+		c = d.nodes[c].next;
+	}
+	var i = 0;
+	while i < rows.len {
+		if !done[i] {
+			var arr = str("[");
+			var n = 0;
+			var j = i;
+			while j < rows.len {
+				if rows[j][..] == rows[i][..] {
+					if n > 0 { arr.push(','); }
+					arr.append(rows[j + 1][..]);
+					n += 1;
+					done[j] = true;
+				}
+				j += 2;
+			}
+			arr.push(']');
+			if any { o.push(','); }
+			any = true;
+			o.append(json_str(rows[i][..])[..]);
+			o.push(':');
+			o.append(arr[..]);
+		}
+		i += 2;
+	}
+	o.push('}');
+	o
+}
+fn env_merged(d json::Doc&, en int, add_window bool) byte[>..] {
+	var o = str("{");
+	var any = false;
+	var has = false;
+	var c = if en >= 0 { d.nodes[en].first } else { -1 };
+	while c >= 0 {
+		let v, _ = json::as_string(d, c);
+		let mine = json::name_of(d, c) == window_key();
+		has = has || mine;
+		if !(mine && !add_window && v == window_val()) {
+			if any { o.push(','); }
+			any = true;
+			o.append(json_str(json::name_of(d, c))[..]);
+			o.push(':');
+			je_emit(d, c, o, -1);
+		}
+		c = d.nodes[c].next;
+	}
+	if add_window && !has {
+		if any { o.push(','); }
+		o.append(str(json_str(window_key()), ":", json_str(window_val()))[..]);
+	}
+	o.push('}');
+	o
+}
+fn save_json(path const byte[:], exists bool, raw const byte[:], d json::Doc&, root int, compact const byte[:]) int {
+	var nd = json::Doc {};
+	let nr, _ = json::parse(compact, nd);
+	if nr < 0 { return -1; }
+	var neu byte[>..] = [];
+	je_emit(nd, nr, neu, 0);
+	neu.push('\n');
+	var old byte[>..] = [];
+	je_emit(d, root, old, 0);
+	old.push('\n');
+	if exists && neu == old { return 0; }
+	if exists && !file_exists(str(path, ".atex-backup")) { write_file(str(path, ".atex-backup"), raw); }
+	if write_file_atomic(path, neu[..]) { 1 } else { -1 }
+}
+fn hooks_update(path const byte[:], rows const byte[>..][:], add_window bool, seed const byte[:]) int {
+	var raw byte[>..] = [];
+	let exists = read_file(path, raw);
+	var d = json::Doc {};
+	let t = trim(raw[..]);
+	let root, _ = json::parse(if t.len > 0 { t } else { seed }, d);
+	if root < 0 || json::kind(d, root) != json::K_OBJ { return -1; }
+	var o = str("{");
+	var any = false;
+	var saw_h = false;
+	var saw_e = false;
+	var c = d.nodes[root].first;
+	while c >= 0 {
+		let nm = json::name_of(d, c);
+		var val byte[>..] = [];
+		if nm == "hooks" {
+			saw_h = true;
+			val = hooks_merged(d, c, rows);
+		} else if nm == "env" {
+			saw_e = true;
+			val = env_merged(d, c, add_window);
+		} else { je_emit(d, c, val, -1); }
+		if !((nm == "hooks" || nm == "env") && val == "{}") {
+			if any { o.push(','); }
+			any = true;
+			o.append(json_str(nm)[..]);
+			o.push(':');
+			o.append(val[..]);
+		}
+		c = d.nodes[c].next;
+	}
+	if !saw_h && rows.len > 0 {
+		if any { o.push(','); }
+		any = true;
+		o.append("\"hooks\":");
+		o.append(hooks_merged(d, -1, rows)[..]);
+	}
+	if !saw_e && add_window {
+		if any { o.push(','); }
+		o.append("\"env\":");
+		o.append(env_merged(d, -1, true)[..]);
+	}
+	o.push('}');
+	save_json(path, exists, raw[..], d, root, o[..])
+}
+fn claude_rows(bin_path const byte[:], kb_dir const byte[:]) byte[>..][>..] {
+	var rows byte[>..][>..] = [];
+	var q byte[>..] = [];
+	sh_quote(q, bin_path);
+	var kq byte[>..] = [];
+	sh_quote(kq, kb_dir);
+	for ev in ["Stop", "SessionStart", "PostToolUse"] {
+		let kind = if ev == "Stop" { "stop" } else if ev == "SessionStart" { "start" } else { "tool" };
+		let ma = if ev == "SessionStart" { "\"matcher\":\"clear|compact\"," } else if ev == "PostToolUse" { "\"matcher\":\"Bash\"," } else { "" };
+		rows.push(str(ev));
+		rows.push(str("{", ma, "\"hooks\":[{\"type\":\"command\",\"command\":", json_str(str(q, " hook ", kind, " --atex-dir ", kq)[..]), "}]}"));
+	}
+	rows
+}
+fn cursor_rule() const byte[:] { "---\ndescription: Keep Cursor prompts small with AmniTex\nalwaysApply: true\n---\n\nDo not reread a whole file or paste a whole tool log. Use atex_where to find the file, then atex_recall with query or lines. A large or repeated read is replaced by a short excerpt before it reaches the model.\n" }
+fn wire_cursor(hm const byte[:], bin_path const byte[:], kb_dir const byte[:]) {
+	make_dir(str(hm, "/.cursor/hooks"));
+	make_dir(str(hm, "/.cursor/rules"));
+	let script = str(hm, "/.cursor/hooks/atex-cursor");
+	var q byte[>..] = [];
+	sh_quote(q, bin_path);
+	var kq byte[>..] = [];
+	sh_quote(kq, kb_dir);
+	write_file(script, str("#!/bin/sh\nexec ", q, " hook cursor --atex-dir ", kq, "\n")[..]);
+	var sq byte[>..] = [];
+	sh_quote(sq, script[..]);
+	run_command(str("chmod 755 ", sq)[..]);
+	var rows byte[>..][>..] = [];
+	for ev in cursor_events() {
+		rows.push(copy(ev));
+		rows.push(str("{\"command\":", json_str(script[..]), "}"));
+	}
+	let r = hooks_update(str(hm, "/.cursor/hooks.json")[..], rows[..], false, "{\"version\":1}");
+	write_stdout(if r < 0 { "  ! ~/.cursor/hooks.json is not valid JSON; left unchanged\n" } else { "  + Cursor hooks (~/.cursor/hooks.json)\n" });
+	write_file(str(hm, "/.cursor/rules/amnitex.mdc"), cursor_rule());
+}
+fn mcp_drop(path const byte[:]) bool {
+	var raw byte[>..] = [];
+	if !read_file(path, raw) { return false; }
+	var d = json::Doc {};
+	let root, _ = json::parse(trim(raw[..]), d);
+	if root < 0 { return false; }
+	let srv = json::member(d, root, "mcpServers");
+	if json::member(d, srv, "amnitex") < 0 { return false; }
+	var o = str("{");
+	var any = false;
+	var c = d.nodes[root].first;
+	while c >= 0 {
+		if any { o.push(','); }
+		any = true;
+		o.append(json_str(json::name_of(d, c))[..]);
+		o.push(':');
+		if c == srv {
+			o.push('{');
+			var m = d.nodes[srv].first;
+			var sep = false;
+			while m >= 0 {
+				if json::name_of(d, m) != "amnitex" {
+					if sep { o.push(','); }
+					sep = true;
+					o.append(json_str(json::name_of(d, m))[..]);
+					o.push(':');
+					je_emit(d, m, o, -1);
+				}
+				m = d.nodes[m].next;
+			}
+			o.push('}');
+		} else { je_emit(d, c, o, -1); }
+		c = d.nodes[c].next;
+	}
+	o.push('}');
+	save_json(path, true, raw[..], d, root, o[..]) > 0
+}
+fn toml_drop(path const byte[:]) bool {
+	var raw byte[>..] = [];
+	if !read_file(path, raw) { return false; }
+	let at = find(raw[..], "[mcp_servers.amnitex]");
+	if at < 0 { return false; }
+	let nx = find(raw[at + 1..], "\n[");
+	let start = if at > 0 && raw[at - 1] == '\n' { at - 1 } else { at };
+	var o = str(raw[..start]);
+	if nx >= 0 { o.append(raw[at + 1 + nx..]); }
+	if !file_exists(str(path, ".atex-backup")) { write_file(str(path, ".atex-backup"), raw[..]); }
+	write_file_atomic(path, o[..])
+}
+fn run_uninstall() {
+	var hm byte[>..] = [];
+	if !env("HOME", hm) || hm.len == 0 { write_stderr("[atex uninstall] HOME is not set\n"); exit(1); }
+	var none byte[>..][>..] = [];
+	if file_exists(str(hm, "/.claude/settings.json")) && hooks_update(str(hm, "/.claude/settings.json")[..], none[..], false, "{}") > 0 { write_stdout("  - Claude Code hooks and compact setting\n"); }
+	if file_exists(str(hm, "/.cursor/hooks.json")) && hooks_update(str(hm, "/.cursor/hooks.json")[..], none[..], false, "{}") > 0 { write_stdout("  - Cursor hooks\n"); }
+	for f in ["/.cursor/hooks/atex-cursor", "/.cursor/rules/amnitex.mdc"] { if delete_file(str(hm, f)) { write_stdout(str("  - ~", f, "\n")[..]); } }
+	for f in ["/.claude.json", "/.cursor/mcp.json", "/.codeium/windsurf/mcp_config.json", "/.gemini/settings.json", "/.config/Claude/claude_desktop_config.json", "/Library/Application Support/Claude/claude_desktop_config.json"] { if mcp_drop(str(hm, f)[..]) { write_stdout(str("  - MCP server from ~", f, "\n")[..]); } }
+	for f in ["/.codex/config.toml", "/.grok/config.toml"] { if toml_drop(str(hm, f)[..]) { write_stdout(str("  - MCP server from ~", f, "\n")[..]); } }
+	write_stdout("[atex uninstall] done. Knowledge bases were left in place. Backups end in .atex-backup.\n");
+	flush_stdout();
+}
+fn doctor_row(ok bool, text const byte[:], fails int&) {
+	write_stdout(str(if ok { "ok " } else { "missing " }, text, "\n")[..]);
+	if !ok { fails += 1; }
+}
+fn hook_kb(raw const byte[:]) byte[>..] {
+	let at = find(raw, " hook stop --atex-dir '");
+	if at < 0 { return str(""); }
+	let s = at + 23;
+	let e = find(raw[s..], "'");
+	if e < 0 { str("") } else { str(raw[s..s + e]) }
+}
+fn run_doctor() {
+	var hm byte[>..] = [];
+	env("HOME", hm);
+	var fails = 0;
+	write_stdout("atex 0.4.0 (gold/helium-native)\n");
+	if is_dir(str(hm, "/.claude")) {
+		var raw byte[>..] = [];
+		read_file(str(hm, "/.claude/settings.json"), raw);
+		var d = json::Doc {};
+		let root, _ = json::parse(trim(raw[..]), d);
+		doctor_row(root >= 0, "Claude Code settings.json is readable", fails);
+		doctor_row(find(raw[..], " hook stop") >= 0, "hook that saves each turn", fails);
+		doctor_row(find(raw[..], " hook start") >= 0, "hook that restores state after /clear and compaction", fails);
+		doctor_row(find(raw[..], " hook tool") >= 0, "hook that keeps long Bash output on disk", fails);
+		let w, okw = json::as_string(d, json::member(d, json::member(d, root, "env"), window_key()));
+		write_stdout(if okw { str("ok compact window ", w, " (compacts about 33K tokens earlier)\n") } else { str("off compaction setting; Claude Code uses its default\n") });
+		var cj byte[>..] = [];
+		read_file(str(hm, "/.claude.json"), cj);
+		var dj = json::Doc {};
+		let rj, _ = json::parse(trim(cj[..]), dj);
+		let srv = json::member(dj, json::member(dj, rj, "mcpServers"), "amnitex");
+		doctor_row(srv >= 0, "Claude Code MCP server", fails);
+		let args = json::member(dj, srv, "args");
+		let mk, okm = json::as_string(dj, json::element(dj, args, json::count(dj, args) - 1));
+		let hk = hook_kb(raw[..]);
+		if okm && hk.len > 0 { doctor_row(mk == hk[..], str("one knowledge base for hooks and search (hooks ", hk, ", search ", mk, ")")[..], fails); }
+	}
+	if is_dir(str(hm, "/.cursor")) {
+		let script = str(hm, "/.cursor/hooks/atex-cursor");
+		doctor_row(file_exists(script), "Cursor hook script", fails);
+		var hj byte[>..] = [];
+		read_file(str(hm, "/.cursor/hooks.json"), hj);
+		var hd = json::Doc {};
+		let hr, _ = json::parse(trim(hj[..]), hd);
+		let evs = json::member(hd, hr, "hooks");
+		for ev in cursor_events() {
+			var found = false;
+			var g = if json::kind(hd, json::member(hd, evs, ev[..])) == 5 { hd.nodes[json::member(hd, evs, ev[..])].first } else { -1 };
+			while g >= 0 {
+				let c, _ = json::as_string(hd, json::member(hd, g, "command"));
+				found = found || find(c, "atex-cursor") >= 0;
+				g = hd.nodes[g].next;
+			}
+			doctor_row(found, str("Cursor hook ", ev)[..], fails);
+		}
+		doctor_row(file_exists(str(hm, "/.cursor/rules/amnitex.mdc")), "Cursor rule", fails);
+		var cm byte[>..] = [];
+		read_file(str(hm, "/.cursor/mcp.json"), cm);
+		doctor_row(find(cm[..], "amnitex") >= 0, "Cursor MCP server", fails);
+	}
+	write_stdout(if fails == 0 { "doctor ok\n" } else { "doctor fail: run atex install\n" });
+	flush_stdout();
+	exit(if fails == 0 { 0 } else { 1 });
+}
+fn env_int(name const byte[:], dflt int) int {
+	var v byte[>..] = [];
+	if !env(name, v) || v.len == 0 { return dflt; }
+	var n = 0;
+	for c in v {
+		if c < '0' || c > '9' { return dflt; }
+		n = n * 10 + (c - '0') as int;
+	}
+	n
+}
+fn utf8_floor(s const byte[:], at0 int) int {
+	var at = at0;
+	while at > 0 && at < s.len && (s[at] & 0xC0) == 0x80 { at -= 1; }
+	at
+}
+fn count_lines(s const byte[:]) int {
+	var n = 0;
+	for c in s { if c == '\n' { n += 1; } }
+	if s.len > 0 && s[s.len - 1] != '\n' { n += 1; }
+	n
+}
+fn has_signal(ln const byte[:], low byte[>..]&) bool {
+	low.clear();
+	lower_into(ln[..min(ln.len, 400)], low);
+	for w in ["error", "fail", "fatal", "panic", "exception", "traceback", "warning"] { if find(low[..], w) >= 0 { return true; } }
+	false
+}
+fn excerpt_output(s const byte[:], budget int, path const byte[:]) byte[>..] {
+	if s.len <= budget { return str(s); }
+	let part = budget * 2 / 5;
+	var hd = part;
+	while hd > 0 && s[hd - 1] != '\n' { hd -= 1; }
+	if hd == 0 { hd = utf8_floor(s, part); }
+	var tl = s.len - part;
+	while tl < s.len && s[tl] != '\n' { tl += 1; }
+	tl = if tl + 1 >= s.len { utf8_floor(s, s.len - part) } else { tl + 1 };
+	var mid byte[>..] = [];
+	var low byte[>..] = [];
+	var room = budget - 2 * part;
+	var kept = 0;
+	for ln in split(s[hd..tl], '\n') {
+		if room <= 0 { break; }
+		if ln.len > 0 && has_signal(ln, low) {
+			let cut = utf8_floor(ln, min(ln.len, 200));
+			mid.append(ln[..cut]);
+			mid.push('\n');
+			room -= cut + 1;
+			kept += 1;
+		}
+	}
+	var o = str(s[..hd]);
+	if o.len > 0 && o[o.len - 1] != '\n' { o.push('\n'); }
+	o.append(str("[atex: showing ", count_lines(s[..hd]) + kept + count_lines(s[tl..]), " of ", count_lines(s), " lines. Full output: ", path, " Search it with rg or print a range with sed -n.]\n")[..]);
+	o.append(mid[..]);
+	o.append(s[tl..]);
+	o
+}
+fn hook_tool(kb_dir const byte[:]) {
+	var inp byte[>..] = [];
+	read_stdin(inp);
+	let cap = env_int("ATEX_TOOL_CAP", 4200);
+	if cap == 0 || inp.len <= cap { return; }
+	var d = json::Doc {};
+	let root, _ = json::parse(trim(inp[..]), d);
+	if root < 0 { return; }
+	let tn, _ = json::as_string(d, json::member(d, root, "tool_name"));
+	if tn != "Bash" { return; }
+	let cmd, _ = json::as_string(d, json::member(d, json::member(d, root, "tool_input"), "command"));
+	if find(cmd, "/atex-") >= 0 && find(cmd, ".txt") >= 0 { return; }
+	let resp = json::member(d, root, "tool_response");
+	let so, oko = json::as_string(d, json::member(d, resp, "stdout"));
+	let se, _ = json::as_string(d, json::member(d, resp, "stderr"));
+	let img, _ = json::as_bool(d, json::member(d, resp, "isImage"));
+	if !oko || img || so.len + se.len <= cap { return; }
+	let tp, okt = json::as_string(d, json::member(d, root, "transcript_path"));
+	let sid, oks = json::as_string(d, json::member(d, root, "session_id"));
+	let tid, _ = json::as_string(d, json::member(d, root, "tool_use_id"));
+	let slash = rfind(tp, "/");
+	var dir byte[>..] = [];
+	if okt && oks && slash > 0 && sid.len > 0 && find(sid, "/") < 0 {
+		make_dir(str(tp[..slash], "/", sid));
+		dir = str(tp[..slash], "/", sid, "/tool-results");
+	} else { dir = str(kb_dir, "/out"); }
+	make_dir(dir[..]);
+	var safe byte[>..] = [];
+	for c in tid { if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-' { safe.push(c); } }
+	if safe.len == 0 { safe = str(time_ns()); }
+	var path = str(dir, "/atex-", safe, ".txt");
+	var full = str(so);
+	if se.len > 0 {
+		if full.len > 0 { full.append("\n--- stderr ---\n"); }
+		full.append(se);
+	}
+	if !write_file(path[..], full[..]) {
+		make_dir(kb_dir);
+		make_dir(str(kb_dir, "/out"));
+		path = str(kb_dir, "/out/atex-", safe, ".txt");
+		if !write_file(path[..], full[..]) { return; }
+	}
+	let be = if se.len == 0 { 0 } else { min(se.len, max(cap / 3, cap - so.len)) };
+	let xo = excerpt_output(so, cap - be, path[..]);
+	let xe = excerpt_output(se, be, path[..]);
+	var o = str("{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"updatedToolOutput\":{");
+	var any = false;
+	var c = d.nodes[resp].first;
+	while c >= 0 {
+		let nm = json::name_of(d, c);
+		if any { o.push(','); }
+		any = true;
+		o.append(json_str(nm)[..]);
+		o.push(':');
+		if nm == "stdout" { o.append(json_str(xo[..])[..]); }
+		else if nm == "stderr" { o.append(json_str(xe[..])[..]); }
+		else { je_emit(d, c, o, -1); }
+		c = d.nodes[c].next;
+	}
+	o.append("}}}\n");
+	write_stdout(o[..]);
+	flush_stdout();
+}
 fn run_install(bin_arg const byte[:], kb_dir const byte[:]) {
 	ensure_kb_dirs(kb_dir);
 	load_kb(kb_dir);
@@ -1102,10 +1610,12 @@ fn run_install(bin_arg const byte[:], kb_dir const byte[:]) {
 			wired += 1;
 		}
 		if is_dir(str(hm, "/.claude")) {
-			let hr = wire_claude_hooks(str(hm, "/.claude/settings.json")[..], bin_path[..], kb_dir);
-			if hr > 0 { write_stdout("  + Claude Code turn hooks (Stop saves turns, SessionStart on /clear restores state)\n"); }
-			else { write_stdout(str("  ! ~/.claude/settings.json already has a hooks block; add manually:\n      Stop: '", bin_path, "' hook stop --atex-dir '", kb_dir, "'\n      SessionStart (matcher clear|compact): '", bin_path, "' hook start --atex-dir '", kb_dir, "'\n")[..]); }
+			let rows = claude_rows(bin_path[..], kb_dir);
+			let hr = hooks_update(str(hm, "/.claude/settings.json")[..], rows[..], !NO_WINDOW, "{}");
+			write_stdout(if hr < 0 { "  ! ~/.claude/settings.json is not valid JSON; left unchanged\n" } else { "  + Claude Code hooks (saves turns, restores state after /clear and compaction, keeps long Bash output on disk)\n" });
+			if hr >= 0 && !NO_WINDOW { write_stdout(str("  + Claude Code compacts at about 250K tokens (", window_key(), "=", window_val(), ") unless you already set that. To turn this off: atex install --no-compact-window\n")[..]); }
 		}
+		if is_dir(str(hm, "/.cursor")) { wire_cursor(hm[..], bin_path[..], kb_dir); }
 		if is_dir(str(hm, "/.cursor")) && wire_json_mcp(str(hm, "/.cursor/mcp.json")[..], bin_path[..], kb_dir) {
 			write_stdout("  + wired Cursor (~/.cursor/mcp.json)\n");
 			wired += 1;
@@ -1675,32 +2185,6 @@ fn run_hook(kind const byte[:]) {
 	if kind == "stop" { hook_stop(d, root); }
 	else if kind == "start" { hook_start(d, root); }
 }
-fn wire_claude_hooks(cfg_path const byte[:], bin_path const byte[:], kb_dir const byte[:]) int {
-	var raw byte[>..] = [];
-	let exists = read_file(cfg_path, raw);
-	if exists && find(raw[..], " hook stop") >= 0 { return 1; }
-	if exists && json_scan(raw[..], 0, "\"hooks\"") >= 0 { return 0; }
-	let stop_cmd = str("'", bin_path, "' hook stop --atex-dir '", kb_dir, "'");
-	let start_cmd = str("'", bin_path, "' hook start --atex-dir '", kb_dir, "'");
-	let blk = str("\"hooks\": {\"Stop\": [{\"hooks\": [{\"type\": \"command\", \"command\": ", json_str(stop_cmd[..]), "}]}], \"SessionStart\": [{\"matcher\": \"clear|compact\", \"hooks\": [{\"type\": \"command\", \"command\": ", json_str(start_cmd[..]), "}]}]}");
-	var out byte[>..] = [];
-	if !exists || trim(raw[..]).len == 0 {
-		out.append("{\n  ");
-		out.append(blk[..]);
-		out.append("\n}\n");
-	} else {
-		let lbr = rfind(raw[..], "}");
-		if lbr <= 0 { return 0; }
-		write_file(str(cfg_path, ".atex-backup"), raw[..]);
-		let pre = trim(raw[..lbr]);
-		out.append(raw[..lbr]);
-		if pre.len > 1 && pre[pre.len - 1] != '{' && pre[pre.len - 1] != ',' { out.push(','); }
-		out.append("\n  ");
-		out.append(blk[..]);
-		out.append("\n}\n");
-	}
-	if write_file_atomic(cfg_path, out[..]) { 2 } else { 0 }
-}
 fn is_section(id int) bool {
 	let k = ekey(id);
 	let p = rfind(k, "::");
@@ -2210,6 +2694,248 @@ fn run_bench(tsv const byte[:]) {
 	write_stdout(out[..]);
 	flush_stdout();
 }
+struct RpEv { k int, a int, b int }
+struct RpPol { name byte[>..], cap int, mask int, rho real, win int, trig int, keep int, least int, fresh int, trim int }
+struct RpRes { tok real, rd real, wr real, out real, resets int }
+fn rp_num(d json::Doc&, u int, name const byte[:]) int {
+	let v, ok = json::as_i64(d, json::member(d, u, name));
+	if ok { v as int } else { 0 }
+}
+fn rp_cappable(n const byte[:]) int {
+	if n == "Bash" { 1 } else if (n == "WebFetch" || n == "WebSearch" || starts_with(n, "mcp__")) && !starts_with(n, "mcp__amnitex") { 2 } else { 0 }
+}
+fn rp_parse(raw const byte[:], ev RpEv[>..]&) {
+	var ld = json::Doc {};
+	var last_id byte[>..] = [];
+	var tools = dictionary<uint, int> {};
+	for ln in split(raw, '\n') {
+		if find(ln, "\"type\":\"user\"") < 0 && find(ln, "\"type\":\"assistant\"") < 0 { continue; }
+		let r, _ = json::parse(ln, ld);
+		if r < 0 { continue; }
+		let sc, oks = json::as_bool(ld, json::member(ld, r, "isSidechain"));
+		let mt, okm = json::as_bool(ld, json::member(ld, r, "isMeta"));
+		if (oks && sc) || (okm && mt) { continue; }
+		let ty, _ = json::as_string(ld, json::member(ld, r, "type"));
+		let msg = json::member(ld, r, "message");
+		let ct = json::member(ld, msg, "content");
+		if ty == "assistant" {
+			let id, _ = json::as_string(ld, json::member(ld, msg, "id"));
+			let u = json::member(ld, msg, "usage");
+			let total = rp_num(ld, u, "input_tokens") + rp_num(ld, u, "cache_read_input_tokens") + rp_num(ld, u, "cache_creation_input_tokens");
+			if id != last_id[..] && total >= 1000 {
+				last_id.clear();
+				last_id.append(id);
+				ev.push(RpEv { k: 0, a: total, b: rp_num(ld, u, "output_tokens") });
+			}
+			for i in 0..json::count(ld, ct) {
+				let it = json::element(ld, ct, i);
+				let bt, _ = json::as_string(ld, json::member(ld, it, "type"));
+				if bt == "tool_use" {
+					let tid, _ = json::as_string(ld, json::member(ld, it, "id"));
+					let nm, _ = json::as_string(ld, json::member(ld, it, "name"));
+					let inp = json::member(ld, it, "input");
+					insert(tools, hash(tid), if nm == "Read" && json::member(ld, inp, "limit") < 0 && json::member(ld, inp, "offset") < 0 { 4 } else { rp_cappable(nm) });
+				}
+			}
+		} else {
+			let s, isstr = json::as_string(ld, ct);
+			var real_text = false;
+			if isstr { let t = trim(s); real_text = t.len > 0 && !starts_with(t, "<command") && !starts_with(t, "<local-command") && !starts_with(t, "Caveat:") && !starts_with(t, "<system-reminder"); } else {
+				for i in 0..json::count(ld, ct) {
+					let it = json::element(ld, ct, i);
+					let bt, _ = json::as_string(ld, json::member(ld, it, "type"));
+					if bt == "tool_result" {
+						let tid, _ = json::as_string(ld, json::member(ld, it, "tool_use_id"));
+						let c = json::member(ld, it, "content");
+						let cs, okc = json::as_string(ld, c);
+						var n = if okc { cs.len } else { 0 };
+						if !okc { for j in 0..json::count(ld, c) { let tx, okt = json::as_string(ld, json::member(ld, json::element(ld, c, j), "text")); if okt { n += tx.len; } } }
+						ev.push(RpEv { k: 1, a: n, b: get(tools, hash(tid), 0) });
+					} else if bt == "text" {
+						let tx, _ = json::as_string(ld, json::member(ld, it, "text"));
+						let t = trim(tx);
+						if t.len > 0 && !starts_with(t, "<command") && !starts_with(t, "<local-command") && !starts_with(t, "Caveat:") && !starts_with(t, "<system-reminder") { real_text = true; }
+					}
+				}
+			}
+			if real_text { ev.push(RpEv { k: 2, a: 0, b: 0 }); }
+		}
+	}
+}
+fn rp_is_drop(prev int, cur int) bool { prev > 0 && cur * 10 < prev * 7 && prev - cur > 30000 }
+fn rp_sim(ev const RpEv[:], p const RpPol&, r real, post int, base int) RpRes {
+	var t = RpRes { tok: 0.0, rd: 0.0, wr: 0.0, out: 0.0, resets: 0 };
+	var removed = 0;
+	var prev = 0;
+	var last = 0;
+	var live int[>..] = [];
+	var live0 = 0;
+	for e in ev {
+		if e.k == 2 {
+			if p.fresh > 0 && last > 0 {
+				removed = max(0, last - base - p.fresh);
+				live.clear();
+				live0 = 0;
+				prev = min(prev, base - p.trim);
+				t.resets += 1;
+			}
+		} else if e.k == 1 {
+			var tk = (e.a as real * r) as int;
+			if p.cap > 0 && (e.b & p.mask) != 0 && tk > p.cap {
+				removed += ((1.0 - p.rho) * (tk - p.cap) as real) as int;
+				tk = p.cap;
+			}
+			live.push(tk);
+		} else {
+			if rp_is_drop(last, e.a) {
+				removed = 0;
+				live.clear();
+				live0 = 0;
+				prev = base - p.trim;
+			}
+			last = e.a;
+			var c = max(e.a - removed, min(e.a, base)) - p.trim;
+			if p.win > 0 && c > p.win {
+				t.rd += c as real;
+				t.tok += c as real;
+				t.out += 8000.0;
+				t.resets += 1;
+				removed = max(0, e.a - post);
+				c = min(e.a, post) - p.trim;
+				live.clear();
+				live0 = 0;
+				prev = base - p.trim;
+			} else if p.trig > 0 && c > p.trig && live.len - p.keep > live0 {
+				var sum = 0;
+				for i in live0..live.len - p.keep { sum += live[i]; }
+				if sum >= p.least {
+					removed += sum;
+					c = max(c - sum, base - p.trim);
+					live0 = live.len - p.keep;
+					prev = min(prev, base - p.trim);
+					t.resets += 1;
+				}
+			}
+			t.tok += c as real;
+			t.rd += min(prev, c) as real;
+			t.wr += max(0, c - prev) as real;
+			prev = c;
+		}
+	}
+	t
+}
+fn rp_cost(t const RpRes&, w real) real { t.rd * 0.05 + t.wr * w + t.out * 5.0 }
+fn rp_pol(name const byte[:], cap int, mask int, win int, trig int, fresh int, trim int) RpPol { RpPol { name: str(name), cap: cap * 1000, mask: mask, rho: 0.3, win: win * 1000, trig: trig * 1000, keep: 3, least: 20000, fresh: fresh, trim: trim * 1000 } }
+fn run_replay(dir0 const byte[:]) {
+	var dir = str(dir0);
+	if dir.len == 0 { var hm byte[>..] = []; env("HOME", hm); dir = str(hm, "/.claude/projects"); }
+	var files byte[>..][>..] = [];
+	var mts int[>..] = [];
+	var names byte[>..] = [];
+	if !list_dir(dir[..], names) { write_stderr(str("[atex replay] cannot read ", dir, "\n")[..]); exit(1); }
+	for nm in split(names[..], '\n') {
+		if nm.len == 0 { continue; }
+		let sub = str(dir, "/", nm);
+		var ff byte[>..] = [];
+		if is_dir(sub) && list_dir(sub[..], ff) { for f in split(ff[..], '\n') { if ends_with(f, ".jsonl") { let full = str(sub, "/", f); files.push(copy(full)); mts.push(file_mtime(full[..])); } } }
+	}
+	var order int[>..] = [];
+	for i in 0..files.len { order.push(i); }
+	sort(order[..]) { x, y => mts[x] > mts[y] };
+	var sessions RpEv[>..][>..] = [];
+	var raw byte[>..] = [];
+	var scanned = 0;
+	for o in order {
+		if sessions.len >= 20 { break; }
+		raw.clear();
+		if !read_file(files[o][..], raw) { continue; }
+		scanned += 1;
+		var ev RpEv[>..] = [];
+		rp_parse(raw[..], ev);
+		var calls = 0;
+		for e in ev { if e.k == 0 { calls += 1; } }
+		if calls >= 300 { sessions.push(copy(ev)); }
+	}
+	raw.clear();
+	var ratios real[>..] = [];
+	var posts int[>..] = [];
+	var bases int[>..] = [];
+	var calls = 0;
+	var turns = 0;
+	for ev in sessions {
+		var last = 0;
+		var out = 0;
+		var chars = 0;
+		var clean = true;
+		var base = 0;
+		for e in ev {
+			if e.k == 1 { chars += e.a; } else if e.k == 2 { turns += 1; clean = false; } else {
+				calls += 1;
+				base = if base == 0 { e.a } else { min(base, e.a) };
+				if rp_is_drop(last, e.a) { posts.push(e.a); }
+				else if last > 0 && clean && chars >= 20000 { ratios.push((e.a - last - out) as real / chars as real); }
+				last = e.a;
+				out = e.b;
+				chars = 0;
+				clean = true;
+			}
+		}
+		bases.push(base);
+	}
+	sort(posts[..]) { x, y => x < y };
+	let med_base = if bases.len > 0 { var b2 = copy(bases); sort(b2[..]) { x, y => x < y }; b2[b2.len / 2] } else { 0 };
+	let post = if posts.len > 0 { posts[posts.len / 2] } else { med_base + 20000 };
+	sort(ratios[..]) { x, y => x < y };
+	let r = if ratios.len > 0 { max(ratios[ratios.len / 2], 0.1) } else { 0.28 };
+	var pols RpPol[>..] = [];
+	pols.push(rp_pol("today", 0, 0, 0, 0, 0, 0));
+	pols.push(rp_pol("compact at 200K", 0, 0, 200, 0, 0, 0));
+	pols.push(rp_pol("compact at 250K", 0, 0, 250, 0, 0, 0));
+	pols.push(rp_pol("compact at 300K", 0, 0, 300, 0, 0, 0));
+	pols.push(rp_pol("cap Bash 2K", 2, 1, 0, 0, 0, 0));
+	pols.push(rp_pol("cap Bash+MCP+web 2K", 2, 3, 0, 0, 0, 0));
+	pols.push(rp_pol("cap Bash+MCP+web 1K", 1, 3, 0, 0, 0, 0));
+	pols.push(rp_pol("cap all + whole-file Read 2K", 2, 7, 0, 0, 0, 0));
+	pols.push(rp_pol("cap Bash 2K + compact 250K", 2, 1, 250, 0, 0, 0));
+	pols.push(rp_pol("cap Bash 1K + compact 250K", 1, 1, 250, 0, 0, 0));
+	pols.push(rp_pol("cap Bash 2K, compact 250K, start -10K", 2, 1, 250, 0, 0, 10));
+	pols.push(rp_pol("clear old results (API), 40K", 0, 0, 0, 40, 0, 0));
+	pols.push(rp_pol("fresh turn, 10K re-read", 0, 0, 0, 0, 11100, 0));
+	pols.push(rp_pol("fresh turn, 30K re-read", 0, 0, 0, 0, 31100, 0));
+	pols.push(rp_pol("cap Bash 2K, compact 250K, fresh 10K", 2, 1, 250, 0, 11100, 0));
+	pols.push(rp_pol("cap Bash 2K, compact 250K, fresh 30K", 2, 1, 250, 0, 31100, 0));
+	var totals RpRes[>..] = [];
+	var per real[>..][>..] = [];
+	for k in 0..pols.len { totals.push(RpRes { tok: 0.0, rd: 0.0, wr: 0.0, out: 0.0, resets: 0 }); per.push([]); }
+	var idx = 0;
+	for ev in sessions {
+		let base = bases[idx];
+		idx += 1;
+		var base_cost = 1.0;
+		for k in 0..pols.len {
+			let t = rp_sim(ev[..], pols[k], r, post, base);
+			totals[k].tok += t.tok;
+			totals[k].rd += t.rd;
+			totals[k].wr += t.wr;
+			totals[k].out += t.out;
+			totals[k].resets += t.resets;
+			if k == 0 { base_cost = max(rp_cost(t, 2.0), 1.0); }
+			per[k].push(100.0 * (1.0 - rp_cost(t, 2.0) / base_cost));
+		}
+	}
+	write_stdout(str("[atex replay] input_tokens=", (totals[0].tok / 1000000.0) as int, "M sessions=", sessions.len, " scanned=", scanned, " calls=", calls, " user_turns=", turns, " tokens_per_char=", fmt(r, 3), " median_start=", med_base, " median_after_compact=", post, "\n")[..]);
+	write_stdout("modeled from logged usage; no model calls. cost uses cache read 0.05x, compaction summary 8K output at 5x, and cache write 1.25x or 2x.\n\npolicy                         input saved   cost saved(1.25x)   cost saved(2x)   median session(2x)   resets\n");
+	let b = totals[0];
+	for k in 0..pols.len {
+		sort(per[k][..]) { x, y => x < y };
+		let t = totals[k];
+		let med = if per[k].len > 0 { per[k][per[k].len / 2] } else { 0.0 };
+		var row = str(pols[k].name);
+		while row.len < 39 { row.push(' '); }
+		write_stdout(str(row, fmt(100.0 * (1.0 - t.tok / max(b.tok, 1.0)), 1), "%          ", fmt(100.0 * (1.0 - rp_cost(t, 1.25) / max(rp_cost(b, 1.25), 1.0)), 1), "%               ", fmt(100.0 * (1.0 - rp_cost(t, 2.0) / max(rp_cost(b, 2.0), 1.0)), 1), "%            ", fmt(med, 1), "%             ", t.resets, "\n")[..]);
+	}
+	flush_stdout();
+}
 fn main() {
 	let av = args();
 	var dir byte[>..] = [];
@@ -2219,23 +2945,26 @@ fn main() {
 	while i < av.len {
 		let a = av[i];
 		if a == "--version" || a == "-v" {
-			write_stdout("atex 0.3.6 (gold/helium-native)\n");
+			write_stdout("atex 0.4.0 (gold/helium-native)\n");
 			flush_stdout();
 			return;
 		} else if a == "--help" || a == "-h" || a == "help" {
-			write_stdout("atex 0.3.6 (gold/helium-native)\nUsage:\n  atex [serve] [--atex-dir <dir>]     Run MCP stdio server\n  atex init [project_dir] [--atex-dir <dir>]  Index project docs & code into KB\n  atex install [--atex-dir <dir>]     Auto-wire Claude, Cursor, Windsurf, Gemini, Codex\n  atex stats [--atex-dir <dir>]       Print knowledge base statistics\n  atex bench <questions.tsv>          Measure answer recall and output size vs whole-file reads\n  atex --selftest                     Run end-to-end TexGrid & byte-page self-test\n");
+			write_stdout("atex 0.4.0 (gold/helium-native)\nUsage:\n  atex [serve] [--atex-dir <dir>]     Run MCP stdio server\n  atex init [project_dir] [--atex-dir <dir>]  Index project docs & code into KB\n  atex install [--atex-dir <dir>] [--no-compact-window]  Wire Claude Code, Cursor, Windsurf, Gemini, Codex, Grok\n  atex uninstall                      Remove the wiring; knowledge bases stay\n  atex doctor                         Check the wiring\n  atex replay [projects_dir]          Model what each setting would have saved on your own Claude Code sessions\n  atex stats [--atex-dir <dir>]       Print knowledge base statistics\n  atex bench <questions.tsv>          Measure answer recall and output size vs whole-file reads\n  atex --selftest                     Run end-to-end TexGrid & byte-page self-test\n");
 			flush_stdout();
 			return;
 		} else if a == "--selftest" || a == "selftest" {
 			exit(run_selftest());
+		} else if a == "--no-compact-window" {
+			NO_WINDOW = true;
+			i += 1;
 		} else if a == "--atex-dir" && i + 1 < av.len {
 			dir.clear();
 			dir.append(av[i + 1]);
 			i += 2;
-		} else if cmd.len == 0 && (a == "serve" || a == "init" || a == "install" || a == "stats" || a == "bench" || a == "hook") {
+		} else if cmd.len == 0 && (a == "serve" || a == "init" || a == "install" || a == "stats" || a == "bench" || a == "hook" || a == "replay" || a == "doctor" || a == "uninstall") {
 			cmd.append(a);
 			i += 1;
-		} else if (cmd == "init" || cmd == "bench" || cmd == "hook") && proj.len == 0 && a[0] != '-' {
+		} else if (cmd == "init" || cmd == "bench" || cmd == "hook" || cmd == "replay") && proj.len == 0 && a[0] != '-' {
 			proj.append(a);
 			i += 1;
 		} else { i += 1; }
@@ -2251,6 +2980,10 @@ fn main() {
 		run_install(b0, dir[..]);
 		return;
 	}
+	if cmd == "doctor" { run_doctor(); return; }
+	if cmd == "uninstall" { run_uninstall(); return; }
+	if cmd == "replay" { run_replay(proj[..]); return; }
+	if cmd == "hook" && proj == "tool" { hook_tool(dir[..]); return; }
 	if !load_kb(dir[..]) {
 		write_stderr("[atex serve] ERROR: failed to load or create index.json\n");
 		exit(1);

@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.4.0] — 2026-11-09
+
+### Added
+
+- `atex replay` reads the usage Claude Code logged in your own sessions and models what each setting would have saved, with prompt-cache prices included. It makes no model calls.
+- `atex install` now sets Claude Code to compact at about 250K tokens, so context stays bounded. A value you already set is kept, and `atex install --no-compact-window` turns it off.
+- A new Bash hook keeps long output on disk. The assistant sees the start, the end, and any error lines, plus the path to the full output.
+- `atex uninstall` and `atex doctor` are now native commands, and `atex install` wires Cursor directly.
+
+### Changed
+
+- `atex install` now merges into an existing `~/.claude/settings.json`, replacing old atex hooks and keeping everything else. It used to stop and ask you to edit the file by hand when a `hooks` block existed.
+- `atex doctor` reports when hooks and search use different knowledge bases. Saved turns can only be searched when they share one.
+- Six benchmark questions about the removed Python code were replaced, so lookup numbers are not comparable with v0.3.6.
+- The README's earlier 41% and 61% replay figures left out cache prices. It now shows input and cost saved separately. Clearing old tool results, which was part of the 61% figure, costs more once cache writes are counted, so it is not shipped.
+
+### Removed
+
+- The Python engine, CLI, clients and tests. Everything runs on the native binary, and tests are now a Gold program in `tests/`.
+- `atex demo` and `atex bench-cursor`, which only existed in Python.
+
 ## [0.3.6] — 2026-11-09
 
 ### Added

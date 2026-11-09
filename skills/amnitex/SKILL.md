@@ -8,8 +8,9 @@ description: Lossless local byte-page memory in native Gold/Helium. Always call 
 ## Mandatory Retrieval Order
 
 1. **At the start of a turn or when resuming context:** Read the restored atex card if one was injected. Otherwise call `atex_recall` on `conv::<project>::latest_state`. Full turns, including tool output, are `conv::<project>::turn_<n>`. Recall a turn before reading a whole file.
-2. **Before running `grep`, `find`, or reading full files:** Call `atex_where(query="...")` to find the file, then `atex_recall(key, query="...")` for just its matching lines. Use `atex_search(query="...")` or `atex_list_keys(prefix="...")` to locate exact documentation sections, architecture maps, build rules, and prior turn facts through the native Helium nonce texture LUT.
+2. **Before reading full files:** Call `atex_where(query="...")` to find the file, then `atex_recall(key, query="...")` for just its matching lines. Use `atex_search(query="...")` or `atex_list_keys(prefix="...")` to locate exact documentation sections, architecture maps, build rules, and prior turn facts through the native Helium nonce texture LUT.
 3. **When the user teaches a persistent project fact:** Call `atex_remember(key="manual::<topic>", text="...")` so it is stored losslessly in `.atex` across sessions and AI tools.
+4. **When a Bash result ends in a note with a saved path:** The full output is on disk. Search that file with rg or print a range with sed -n instead of running the command again.
 
 ## Reading Results Without Loss
 

@@ -27,35 +27,11 @@ else
 fi
 chmod 755 "$REAL.new"
 mv -f "$REAL.new" "$REAL"
-if [ -f "$ROOT/atex/cli.py" ]; then
-  cat > "$DEST/atex" <<WRAP
-#!/bin/sh
-REAL="$REAL"
-case "\${1:-}" in
-  install|uninstall|doctor|bench-cursor)
-    if PYTHONPATH="$ROOT\${PYTHONPATH:+:\$PYTHONPATH}" python3 -c 'import atex.cli' >/dev/null 2>&1; then
-      export PYTHONPATH="$ROOT\${PYTHONPATH:+:\$PYTHONPATH}"
-      exec python3 -m atex.cli "\$@"
-    fi
-    ;;
-esac
-exec "\$REAL" "\$@"
-WRAP
-else
-  printf '#!/bin/sh\nexec "%s" "$@"\n' "$REAL" > "$DEST/atex"
-fi
+printf '#!/bin/sh\nexec "%s" "$@"\n' "$REAL" > "$DEST/atex"
 chmod 755 "$DEST/atex"
 "$REAL" --version
 "$REAL" --selftest
 "$REAL" init . --atex-dir "$KB"
-if [ -f "$ROOT/atex/cli.py" ]; then
-  export PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}"
-  if python3 -c 'import atex.cli' >/dev/null 2>&1; then
-    ATEX_BIN="$REAL" python3 -m atex.cli install --atex-dir "$KB"
-  else
-    printf "[amnitex] python3 atex package not importable; native MCP wiring only.\n"
-  fi
-fi
 "$REAL" install --atex-dir "$KB"
 printf "[amnitex] installed %s (wrapper %s/atex, kb=%s)\n" "$REAL" "$DEST" "$KB"
 printf "[amnitex] check: atex doctor\n"
