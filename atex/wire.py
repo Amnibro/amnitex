@@ -25,7 +25,7 @@ description: Keep Cursor prompts small with AmniTex
 alwaysApply: true
 ---
 
-Do not reread a whole file or paste a whole tool log. Use atex_search or atex_recall for a line range. A large or repeated read is replaced by a short excerpt before it reaches the model. The session card is the durable state.
+Do not reread a whole file or paste a whole tool log. Use atex_where to find the file, then atex_recall with query or lines. A large or repeated read is replaced by a short excerpt before it reaches the model. The session card is the durable state.
 """
 
 

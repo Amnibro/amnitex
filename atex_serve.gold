@@ -8,7 +8,7 @@ import os;
 import json;
 import dictionary;
 struct Page { fname byte[..64], idx int, used int }
-struct Entry { koff int, klen int, page int, off int, len int, src_bytes int }
+struct Entry { koff int, klen int, page int, off int, len int, src_bytes int, mt int }
 struct Hit { id int, score int, conf int }
 var ADIR byte[>..];
 var PAGES Page[>..];
@@ -27,6 +27,16 @@ var PST int[>..];
 var TEX_W = 4096;
 var LAST_SIG = 0 as uint;
 var WRITE_OK = true;
+var ROOTS byte[>..][>..];
+var LAST_SWEEP = 0;
+var SW_GAP = 500000000;
+var SW_APPLY = false;
+var SW_DIRTY = false;
+var SW_MISSING = false;
+var SW_SEEN bool[>..];
+var SW_SKIP dictionary<uint, int>;
+var WH_ID int[>..];
+var FUZZY_ID byte[>..];
 var LOCK_DEPTH = 0;
 var LOCK_BEAT = 0;
 let LOCK_WAIT_MS = 40000;
@@ -252,7 +262,7 @@ fn build_grid() {
 	reset_lut();
 	if !load_tex() {
 		reset_lut();
-		for i in 0..ENTRIES.len { grid_insert(i, ekey(i), entry_text(i)); }
+		for i in 0..ENTRIES.len { if ENTRIES[i].len > 0 { grid_insert(i, ekey(i), entry_text(i)); } }
 		finalize_lut();
 		if kb_lock(0) { save_tex(); kb_unlock(); }
 	}
@@ -325,6 +335,7 @@ fn add_term_raw(terms QTerm[>..]&, w const byte[:], syn int) {
 }
 fn query_terms(q const byte[:]) QTerm[>..] {
 	if !GBUILT { build_grid(); }
+	FUZZY_ID.clear();
 	var terms QTerm[>..] = [];
 	var i = 0;
 	var w byte[..128] = [];
@@ -357,7 +368,10 @@ fn query_terms(q const byte[:]) QTerm[>..] {
 			}
 			prev.clear();
 			if !is_stop(w[..]) { prev.append(w[..]); }
-			if has_sep {
+			let tail = if w.len > 0 { w[w.len - 1] } else { ' ' };
+			let whole = has_sep && nonce_find(w[..]) >= 0;
+			if has_sep && !whole && tail != '_' && tail != '-' && tail != '.' && FUZZY_ID.len == 0 { FUZZY_ID.append(q[a..min(i, a + 128)]); }
+			if has_sep && !whole {
 				sub.clear();
 				for m in 0..w.len {
 					let c = w[m];
@@ -369,6 +383,19 @@ fn query_terms(q const byte[:]) QTerm[>..] {
 	}
 	terms
 }
+fn weigh_term(terms QTerm[>..]&, ti int, n int, ids int[>..]&) int {
+	ids.clear();
+	postings(terms[ti].cell, ids);
+	if ids.len == 0 { return 0; }
+	sort(ids[..]) { a, b => a < b };
+	var df = 0;
+	for j in 0..ids.len { if j == 0 || ids[j] != ids[j - 1] { df += 1; } }
+	let r = max(1, (n * 4) / (df + 1));
+	let wt0 = (64 - clz(r as uint)) as int;
+	let wt = if terms[ti].syn == 1 { max(1, wt0 / 2) } else { wt0 };
+	terms[ti].wt = wt;
+	wt
+}
 fn rank(terms QTerm[>..]&) Hit[>..] {
 	if !GBUILT { build_grid(); }
 	var scores = dictionary<int, int> {};
@@ -376,16 +403,8 @@ fn rank(terms QTerm[>..]&) Hit[>..] {
 	var total = 0;
 	let n = ENTRIES.len + 1;
 	for ti in 0..terms.len {
-		ids.clear();
-		postings(terms[ti].cell, ids);
-		if ids.len == 0 { continue; }
-		sort(ids[..]) { a, b => a < b };
-		var df = 0;
-		for j in 0..ids.len { if j == 0 || ids[j] != ids[j - 1] { df += 1; } }
-		let r = max(1, (n * 4) / (df + 1));
-		let wt0 = (64 - clz(r as uint)) as int;
-		let wt = if terms[ti].syn == 1 { max(1, wt0 / 2) } else { wt0 };
-		terms[ti].wt = wt;
+		let wt = weigh_term(terms, ti, n, ids);
+		if wt == 0 { continue; }
 		if terms[ti].syn == 0 { total += wt; }
 		for j in 0..ids.len { if j == 0 || ids[j] != ids[j - 1] { update(scores, ids[j], 0) { it += wt; }; } }
 	}
@@ -440,12 +459,8 @@ fn mask_wt(terms QTerm[>..]&, m uint) int {
 	for ti in 0..min(terms.len, 64) { if (m >> (ti as uint)) & 1 == 1 { s += terms[ti].wt; } }
 	s
 }
-fn snippet(txt const byte[:], terms QTerm[>..]&, mc int, out byte[>..]&) int {
-	var st int[>..] = [];
-	var sc uint[>..] = [];
-	var df bool[>..] = [];
+fn scan_lines(txt const byte[:], terms QTerm[>..]&, st int[>..]&, sc uint[>..]&, df bool[>..]&) {
 	var lb byte[>..] = [];
-	SN_ALSO.clear();
 	var a = 0;
 	while a < txt.len {
 		var e = a;
@@ -460,16 +475,26 @@ fn snippet(txt const byte[:], terms QTerm[>..]&, mc int, out byte[>..]&) int {
 		a = e + 1;
 	}
 	st.push(a);
+}
+fn line_value(terms QTerm[>..]&, sc uint[>..]&, df bool[>..]&, j int) int {
+	var wm = sc[j];
+	if j > 0 { wm = wm | sc[j - 1]; }
+	if j + 1 < sc.len { wm = wm | sc[j + 1]; }
+	let cw = mask_wt(terms, sc[j]);
+	mask_wt(terms, wm) * 4 + cw + (if df[j] { cw * 3 } else { 0 })
+}
+fn snippet(txt const byte[:], terms QTerm[>..]&, mc int, out byte[>..]&) int {
+	var st int[>..] = [];
+	var sc uint[>..] = [];
+	var df bool[>..] = [];
+	SN_ALSO.clear();
+	scan_lines(txt, terms, st, sc, df);
 	let nl = sc.len;
 	if nl == 0 { SN_B0 = 0; SN_B1 = 0; SN_S = 1; SN_E = 1; return 0; }
 	var b = 0;
 	var bs = -1;
 	for j in 0..nl {
-		var wm = sc[j];
-		if j > 0 { wm = wm | sc[j - 1]; }
-		if j + 1 < nl { wm = wm | sc[j + 1]; }
-		let cw = mask_wt(terms, sc[j]);
-		let v = mask_wt(terms, wm) * 4 + cw + (if df[j] { cw * 3 } else { 0 });
+		let v = line_value(terms, sc, df, j);
 		if v > bs { bs = v; b = j; }
 	}
 	SN_WIN = bs;
@@ -539,9 +564,18 @@ fn flush_index() {
 		format(out, ENTRIES[i].len);
 		out.append(",\"meta\":{\"source_bytes\":");
 		format(out, ENTRIES[i].src_bytes);
+		if ENTRIES[i].mt > 0 {
+			out.append(",\"mtime\":");
+			format(out, ENTRIES[i].mt);
+		}
 		out.append("}}");
 	}
-	out.append("},\"n_entries\":");
+	out.append("},\"roots\":[");
+	for i in 0..ROOTS.len {
+		if i > 0 { out.push(','); }
+		json::format_string(out, ROOTS[i][..]);
+	}
+	out.append("],\"n_entries\":");
 	format(out, ENTRIES.len);
 	out.append(",\"tokenizer\":\"utf-8_bytes\",\"created\":\"2026-11-07T00:00:00Z\"}");
 	if write_file_atomic(str(ADIR, "/index.json"), out[..]) { LAST_SIG = hash(out[..]); } else { WRITE_OK = false; }
@@ -563,6 +597,7 @@ fn load_kb(dir const byte[:]) bool {
 		ENTRIES.clear();
 		clear(KIDX);
 		KARENA.clear();
+		ROOTS.clear();
 		PAGE_BYTES = PAGE_W * PAGE_H * 4;
 		GBUILT = false;
 		if kb_lock(LOCK_WAIT_MS) {
@@ -582,6 +617,7 @@ fn load_kb(dir const byte[:]) bool {
 	ENTRIES.clear();
 	clear(KIDX);
 	KARENA.clear();
+	ROOTS.clear();
 	var scratch byte[>..] = [];
 	json::each_member(r) { top_k =>
 		if top_k == "page_w" { PAGE_W = json::read_number(r) as int; }
@@ -608,6 +644,7 @@ fn load_kb(dir const byte[:]) bool {
 				var of = 0;
 				var ln = 0;
 				var sb = 0;
+				var mtv = 0;
 				json::each_member(r) { fk =>
 					if fk == "page_idx" { pi = json::read_number(r) as int; }
 					else if fk == "offset" { of = json::read_number(r) as int; }
@@ -617,7 +654,8 @@ fn load_kb(dir const byte[:]) bool {
 							if mk == "source_bytes" || mk == "parent_bytes" {
 								let v = json::read_number(r) as int;
 								if sb == 0 { sb = v; }
-							} else { json::skip_value(r); }
+							} else if mk == "mtime" { mtv = json::read_number(r) as int; }
+							else { json::skip_value(r); }
 						};
 					} else { json::skip_value(r); }
 				};
@@ -625,8 +663,14 @@ fn load_kb(dir const byte[:]) bool {
 				let id = ENTRIES.len;
 				let ko = KARENA.len;
 				KARENA.append(ky[..]);
-				ENTRIES.push(Entry { koff: ko, klen: ky.len, page: pi, off: of, len: ln, src_bytes: sb });
+				ENTRIES.push(Entry { koff: ko, klen: ky.len, page: pi, off: of, len: ln, src_bytes: sb, mt: mtv });
 				kadd(id);
+			};
+		} else if top_k == "roots" {
+			json::each_element(r) {
+				var rp byte[>..] = [];
+				rp.append(json::read_string(r, scratch));
+				ROOTS.push(copy(rp));
 			};
 		} else { json::skip_value(r); }
 	};
@@ -752,7 +796,7 @@ fn put_kb_entry_mem(full_key const byte[:], text const byte[:], src_b int, write
 		let id = ENTRIES.len;
 		let ko = KARENA.len;
 		KARENA.append(full_key);
-		ENTRIES.push(Entry { koff: ko, klen: full_key.len, page: p, off: off, len: text.len, src_bytes: sb });
+		ENTRIES.push(Entry { koff: ko, klen: full_key.len, page: p, off: off, len: text.len, src_bytes: sb, mt: 0 });
 		kadd(id);
 		if GBUILT { grid_insert(id, full_key, text); }
 	}
@@ -789,11 +833,23 @@ fn slugify_heading(h const byte[:], out byte[>..]&) {
 	}
 	while out.len > 0 && out[out.len - 1] == '-' { out.pop(); }
 }
+fn drop_sections(full_k const byte[:]) {
+	for i in 0..ENTRIES.len {
+		let k = ekey(i);
+		if k.len > full_k.len + 2 && starts_with(k, full_k) && k[full_k.len] == ':' && k[full_k.len + 1] == ':' && ENTRIES[i].len > 0 {
+			ENTRIES[i].len = 0;
+			GBUILT = false;
+		}
+	}
+}
 fn ingest_doc(ns const byte[:], rel const byte[:], path const byte[:]) int {
+	let mt = file_mtime(path);
 	var raw byte[>..] = [];
 	if !read_file(path, raw) || raw.len == 0 || raw.len > 524288 { return 0; }
 	let full_k = str(ns, "::", rel);
+	drop_sections(full_k[..]);
 	put_kb_entry_mem(full_k[..], raw[..], raw.len, false);
+	ENTRIES[kfind(full_k[..])].mt = mt;
 	var added = 1;
 	if ends_with(rel, ".md") {
 		var sec_title byte[>..] = [];
@@ -833,7 +889,40 @@ fn ingest_doc(ns const byte[:], rel const byte[:], path const byte[:]) int {
 	added
 }
 fn is_indexable_file(name const byte[:]) bool {
-	ends_with(name, ".md") || ends_with(name, ".gold") || ends_with(name, ".he") || ends_with(name, ".amni") || ends_with(name, ".py") || ends_with(name, ".ts") || ends_with(name, ".rs") || ends_with(name, ".go") || ends_with(name, ".toml") || ends_with(name, ".kt") || ends_with(name, ".kts") || ends_with(name, ".js") || ends_with(name, ".java") || ends_with(name, ".swift") || ends_with(name, ".c") || ends_with(name, ".h") || ends_with(name, ".sh") || ends_with(name, ".yml") || ends_with(name, ".yaml")
+	ends_with(name, ".md") || ends_with(name, ".gold") || ends_with(name, ".he") || ends_with(name, ".amni") || ends_with(name, ".py") || ends_with(name, ".ts") || ends_with(name, ".rs") || ends_with(name, ".go") || ends_with(name, ".toml") || ends_with(name, ".kt") || ends_with(name, ".kts") || ends_with(name, ".js") || ends_with(name, ".java") || ends_with(name, ".swift") || ends_with(name, ".c") || ends_with(name, ".h") || ends_with(name, ".sh") || ends_with(name, ".yml") || ends_with(name, ".yaml") || ends_with(name, ".tsx") || ends_with(name, ".jsx") || ends_with(name, ".mjs") || ends_with(name, ".cjs") || ends_with(name, ".cpp") || ends_with(name, ".cc") || ends_with(name, ".hpp") || ends_with(name, ".cs") || ends_with(name, ".rb") || ends_with(name, ".php") || ends_with(name, ".lua") || ends_with(name, ".html") || ends_with(name, ".css") || ends_with(name, ".sql") || ends_with(name, ".ps1") || ends_with(name, ".bash") || ends_with(name, ".proto")
+}
+fn file_fresh(id int, full const byte[:]) bool {
+	if id < 0 || ENTRIES[id].len == 0 || file_mtime(full) != ENTRIES[id].mt { return false; }
+	if time_ns() / 1000000000 - ENTRIES[id].mt > 2 { return true; }
+	var raw byte[>..] = [];
+	read_file(full, raw) && raw[..] == entry_text(id)
+}
+fn mark_seen(id int) {
+	while SW_SEEN.len <= id { SW_SEEN.push(false); }
+	SW_SEEN[id] = true;
+}
+fn index_file(rel const byte[:], full const byte[:]) int {
+	let key = str("project::", rel);
+	let id = kfind(key[..]);
+	if id >= 0 { mark_seen(id); }
+	if file_fresh(id, full) { return 0; }
+	let ph = hash(full);
+	let mt = file_mtime(full);
+	if contains(SW_SKIP, ph) && get(SW_SKIP, ph, 0) == mt { return 0; }
+	if !SW_APPLY {
+		SW_DIRTY = true;
+		return 0;
+	}
+	let n = ingest_doc("project", rel, full);
+	if n == 0 {
+		insert(SW_SKIP, ph, mt);
+		if id >= 0 {
+			ENTRIES[id].len = 0;
+			GBUILT = false;
+			drop_sections(key[..]);
+		}
+	} else { mark_seen(kfind(key[..])); }
+	n
 }
 fn walk_index(dir const byte[:], rel const byte[:], depth int) int {
 	var names byte[>..] = [];
@@ -846,10 +935,78 @@ fn walk_index(dir const byte[:], rel const byte[:], depth int) int {
 		if is_dir(full) {
 			if depth < 5 { count += walk_index(full[..], r[..], depth + 1); }
 		} else if is_indexable_file(nm) {
-			if !(ends_with(nm, ".amni") && file_exists(str(full[..full.len - 5], ".gold"))) { count += ingest_doc("project", r[..], full[..]); }
+			if !(ends_with(nm, ".amni") && file_exists(str(full[..full.len - 5], ".gold"))) { count += index_file(r[..], full[..]); }
 		}
 	}
 	count
+}
+fn abs_path(p const byte[:]) byte[>..] {
+	if p.len > 0 && p[0] == '/' { return str(p); }
+	var cwd byte[>..] = [];
+	if !env("PWD", cwd) { return str(p); }
+	if p.len == 0 || p == "." { return cwd; }
+	str(cwd, "/", p)
+}
+fn add_root(path const byte[:]) {
+	let full = abs_path(path);
+	var hm byte[>..] = [];
+	if full.len <= 1 || (env("HOME", hm) && hm[..] == full[..]) { return; }
+	for r in ROOTS { if r[..] == full[..] { return; } }
+	ROOTS.push(copy(full));
+}
+fn walk_roots() int {
+	SW_SEEN.clear();
+	SW_MISSING = false;
+	var count = 0;
+	for i in 0..ROOTS.len {
+		let r = str(ROOTS[i]);
+		if is_dir(r[..]) { count += walk_index(r[..], "", 1); } else { SW_MISSING = true; }
+	}
+	count
+}
+fn gone_from_root(i int) bool {
+	ENTRIES[i].mt > 0 && ENTRIES[i].len > 0 && (i >= SW_SEEN.len || !SW_SEEN[i]) && starts_with(ekey(i), "project::") && !is_section(i)
+}
+fn apply_roots(first_page int) int {
+	SW_APPLY = true;
+	let count = walk_roots();
+	SW_APPLY = false;
+	if !SW_MISSING {
+		for i in 0..ENTRIES.len {
+			if gone_from_root(i) {
+				let k = str(ekey(i));
+				ENTRIES[i].len = 0;
+				GBUILT = false;
+				drop_sections(k[..]);
+			}
+		}
+	}
+	for p in first_page..PAGES.len {
+		ensure_page_loaded(p);
+		write_page(p);
+	}
+	flush_index();
+	count
+}
+fn kb_sweep() {
+	if ROOTS.len == 0 || clock_ns() - LAST_SWEEP < SW_GAP { return; }
+	let t0 = clock_ns();
+	SW_APPLY = false;
+	SW_DIRTY = false;
+	walk_roots();
+	LAST_SWEEP = clock_ns();
+	SW_GAP = max(500000000, (LAST_SWEEP - t0) * 20);
+	if !SW_DIRTY && !SW_MISSING {
+		for i in 0..ENTRIES.len {
+			if gone_from_root(i) {
+				SW_DIRTY = true;
+				break;
+			}
+		}
+	}
+	if !SW_DIRTY || !kb_begin() { return; }
+	apply_roots(max(PAGES.len - 1, 0));
+	kb_unlock();
 }
 fn run_init(proj_dir const byte[:], kb_dir const byte[:]) {
 	ensure_kb_dirs(kb_dir);
@@ -859,14 +1016,10 @@ fn run_init(proj_dir const byte[:], kb_dir const byte[:]) {
 	var hm byte[>..] = [];
 	if env("HOME", hm) && hm.len > 0 {
 		let gcl = str(hm, "/.claude/CLAUDE.md");
-		if file_exists(gcl) { count += ingest_doc("claude", "global", gcl[..]); }
+		if file_exists(gcl) && !file_fresh(kfind("claude::global"), gcl[..]) { count += ingest_doc("claude", "global", gcl[..]); }
 	}
-	count += walk_index(proj_dir, "", 1);
-	for p in 0..PAGES.len {
-		ensure_page_loaded(p);
-		write_page(p);
-	}
-	flush_index();
+	add_root(proj_dir);
+	count += apply_roots(0);
 	kb_unlock();
 	write_stdout(str("[atex init] indexed ", count, " entries (", ENTRIES.len, " total) into ", ADIR, " (gold/helium-native)\n")[..]);
 	flush_stdout();
@@ -1057,16 +1210,35 @@ fn run_selftest() int {
 		if id >= 0 && entry_text(id) == str("writer fact ", i)[..] { intact += 1; }
 	}
 	let unlocked = !is_dir(lock_path()[..]);
+	let src = str(tdir, "/src");
+	let src_file = str(src, "/tier.py");
+	make_dir(src[..]);
+	write_file(src_file[..], "alpha\nORIGINAL_VALUE here\nomega\n");
+	kb_begin();
+	add_root(src[..]);
+	apply_roots(0);
+	kb_unlock();
+	let w_old = where_text("ORIGINAL_VALUE", 3, "");
+	let in_file = file_query_text("project::tier.py", entry_text(kfind("project::tier.py")), "ORIGINAL_VALUE", 600);
+	var tiers = find(w_old[..], "project::tier.py 1: L2") >= 0 && find(in_file[..], "ORIGINAL_VALUE") >= 0;
+	write_file(src_file[..], "alpha\nCHANGED_VALUE here\nomega\n");
+	LAST_SWEEP = 0;
+	kb_sweep();
+	tiers = tiers && find(where_text("CHANGED_VALUE", 3, "")[..], "project::tier.py") >= 0 && find(where_text("ORIGINAL_VALUE", 3, "")[..], "no exact match") >= 0;
+	delete_file(src_file[..]);
+	LAST_SWEEP = 0;
+	kb_sweep();
+	tiers = tiers && find(where_text("CHANGED_VALUE", 3, "")[..], "project::tier.py") < 0;
 	var rm byte[>..] = [];
 	rm.append("rm -rf ");
 	sh_quote(rm, tdir[..]);
 	run_command(rm[..]);
-	if ok && renewed && intact == writers && unlocked {
-		write_stdout(str("[atex selftest] PASS (gold/helium-native, recall=1/1, exact_match=true, concurrent=", intact, "/", writers, ")\n")[..]);
+	if ok && renewed && intact == writers && unlocked && tiers {
+		write_stdout(str("[atex selftest] PASS (gold/helium-native, recall=1/1, exact_match=true, concurrent=", intact, "/", writers, ", tiers=true)\n")[..]);
 		flush_stdout();
 		0
 	} else {
-		write_stderr(str("[atex selftest] FAIL recall=", ok, " overwrite=", renewed, " concurrent=", intact, "/", writers, " unlocked=", unlocked, "\n")[..]);
+		write_stderr(str("[atex selftest] FAIL recall=", ok, " overwrite=", renewed, " concurrent=", intact, "/", writers, " unlocked=", unlocked, " tiers=", tiers, "\n")[..]);
 		1
 	}
 }
@@ -1546,6 +1718,161 @@ fn line_of(txt const byte[:], at int) int {
 	for i in 0..min(at, txt.len) { if txt[i] == '\n' { n += 1; } }
 	n
 }
+fn where_text(q const byte[:], k int, scope const byte[:]) byte[>..] {
+	var res byte[>..] = [];
+	var terms = query_terms(q);
+	let hits = rank(terms);
+	WH_ID.clear();
+	var seen = dictionary<int, int> {};
+	var rest = 0;
+	var dn byte[>..][>..] = [];
+	var dc int[>..] = [];
+	var st int[>..] = [];
+	var sc uint[>..] = [];
+	var df bool[>..] = [];
+	for h in hits {
+		var id = h.id;
+		if is_section(id) {
+			let kk = ekey(id);
+			id = kfind(kk[..rfind(kk, "::")]);
+		}
+		if id < 0 || ENTRIES[id].len == 0 || contains(seen, id) { continue; }
+		insert(seen, id, 1);
+		let key = ekey(id);
+		let cp = find(key, "::");
+		let rel = if cp >= 0 { key[cp + 2..] } else { key };
+		if scope.len > 0 && !starts_with(rel, scope) && !starts_with(key, scope) { continue; }
+		if WH_ID.len >= k || (h.conf == 0 && WH_ID.len > 0) {
+			rest += 1;
+			let sl = rfind(rel, "/");
+			let dir = if sl > 0 { rel[..sl + 1] } else { "./" };
+			var at = -1;
+			for i in 0..dn.len { if dn[i][..] == dir { at = i; } }
+			if at < 0 {
+				dn.push(str(dir));
+				dc.push(1);
+			} else { dc[at] += 1; }
+			continue;
+		}
+		st.clear();
+		sc.clear();
+		df.clear();
+		let txt = entry_text(id);
+		scan_lines(txt, terms, st, sc, df);
+		var order int[>..] = [];
+		for j in 0..sc.len { if sc[j] != 0 { order.push(j); } }
+		WH_ID.push(id);
+		res.append(key);
+		if order.len == 0 {
+			res.append(" (name only)\n");
+			continue;
+		}
+		sort(order[..]) { x, y => line_value(terms, sc, df, x) > line_value(terms, sc, df, y) || (line_value(terms, sc, df, x) == line_value(terms, sc, df, y) && x < y) };
+		res.push(' ');
+		format(res, order.len);
+		res.push(':');
+		for j in 0..min(order.len, 3) {
+			res.append(" L");
+			format(res, order[j] + 1);
+		}
+		res.append("\n  ");
+		let best = trim(txt[st[order[0]]..min(st[order[0] + 1], txt.len)]);
+		res.append(best[..min(best.len, 120)]);
+		res.push('\n');
+	}
+	if WH_ID.len == 0 {
+		res.append("(no stored entry contains these terms; atex_search exact=true scans raw text)");
+		return res;
+	}
+	if FUZZY_ID.len > 0 {
+		var note byte[>..] = [];
+		note.append("(no exact match for ");
+		note.append(FUZZY_ID[..]);
+		note.append("; partial matches)\n");
+		note.append(res[..]);
+		return note;
+	}
+	if rest > 0 {
+		res.append("[+");
+		format(res, rest);
+		res.append(" more files:");
+		for i in 0..min(dn.len, 7) {
+			res.push(' ');
+			res.append(dn[i][..]);
+			res.push(' ');
+			format(res, dc[i]);
+		}
+		res.append("; path= narrows]");
+	}
+	res
+}
+fn file_query_text(key const byte[:], txt const byte[:], q const byte[:], mc int) byte[>..] {
+	var res byte[>..] = [];
+	var terms = query_terms(q);
+	var ids int[>..] = [];
+	for ti in 0..terms.len { weigh_term(terms, ti, ENTRIES.len + 1, ids); }
+	var st int[>..] = [];
+	var sc uint[>..] = [];
+	var df bool[>..] = [];
+	scan_lines(txt, terms, st, sc, df);
+	let nl = sc.len;
+	var order int[>..] = [];
+	for j in 0..nl { if sc[j] != 0 { order.push(j); } }
+	res.append(key);
+	if order.len == 0 {
+		res.append(" has no matching lines");
+		return res;
+	}
+	sort(order[..]) { x, y => line_value(terms, sc, df, x) > line_value(terms, sc, df, y) || (line_value(terms, sc, df, x) == line_value(terms, sc, df, y) && x < y) };
+	var keep bool[>..] = [];
+	keep.resize(nl, false);
+	var used = 0;
+	var shown = 0;
+	for j in order {
+		let a = max(j - 1, 0);
+		let b = min(j + 1, nl - 1);
+		var add = 0;
+		for x in a..b + 1 { if !keep[x] { add += st[x + 1] - st[x]; } }
+		if shown > 0 && mc > 0 && used + add > mc { break; }
+		for x in a..b + 1 { keep[x] = true; }
+		used += add;
+		shown += 1;
+	}
+	res.push(' ');
+	format(res, order.len);
+	res.append(" of ");
+	format(res, nl);
+	res.append(" lines match\n");
+	var x = 0;
+	while x < nl {
+		if !keep[x] {
+			x += 1;
+			continue;
+		}
+		var y = x;
+		while y + 1 < nl && keep[y + 1] { y += 1; }
+		res.push('L');
+		format(res, x + 1);
+		res.push('-');
+		format(res, y + 1);
+		res.push('\n');
+		let body = txt[st[x]..min(st[y + 1], txt.len)];
+		if mc > 0 && body.len > mc + 200 { res.append(body[..mc]); res.append("...\n"); } else { res.append(body); }
+		if res[res.len - 1] != '\n' { res.push('\n'); }
+		x = y + 1;
+	}
+	if shown < order.len {
+		res.append("[+");
+		format(res, order.len - shown);
+		res.append(" more:");
+		for j in shown..min(order.len, shown + 8) {
+			res.append(" L");
+			format(res, order[j] + 1);
+		}
+		res.append("]");
+	}
+	res
+}
 fn search_text(q const byte[:], k int, mc int, page int) byte[>..] {
 	var res byte[>..] = [];
 	var terms = query_terms(q);
@@ -1681,6 +2008,68 @@ fn slice_lines(txt const byte[:], spec const byte[:], out byte[>..]&) bool {
 	out.append(txt[p..e]);
 	true
 }
+var GREP_HIT = false;
+fn grep_route(q const byte[:], ex const byte[:]) int {
+	var words byte[>..][>..] = [];
+	var i = 0;
+	while i < q.len {
+		if !is_tok_lead(q[i]) {
+			i += 1;
+			continue;
+		}
+		var w byte[>..] = [];
+		while i < q.len && is_tok_cont(q[i]) {
+			w.push(lower(q[i]));
+			i += 1;
+		}
+		if w.len > 2 && !is_stop(w[..]) { words.push(copy(w)); }
+	}
+	var low byte[>..] = [];
+	var best = -1;
+	var bn = 0;
+	for wi in 0..words.len {
+		var n = 0;
+		for id in 0..ENTRIES.len {
+			if ENTRIES[id].len == 0 || is_section(id) || !starts_with(ekey(id), "project::") { continue; }
+			for ln in split(entry_text(id), '\n') {
+				lower_into(ln, low);
+				if find(low[..], words[wi][..]) >= 0 { n += 1; }
+			}
+		}
+		if n > 0 && (best < 0 || n < bn) {
+			best = wi;
+			bn = n;
+		}
+	}
+	GREP_HIT = false;
+	if best < 0 { return 0; }
+	var out byte[>..] = [];
+	var shown = 0;
+	for id in 0..ENTRIES.len {
+		if shown >= 30 { break; }
+		if ENTRIES[id].len == 0 || is_section(id) || !starts_with(ekey(id), "project::") { continue; }
+		var no = 0;
+		for ln in split(entry_text(id), '\n') {
+			no += 1;
+			lower_into(ln, low);
+			if shown < 30 && find(low[..], words[best][..]) >= 0 {
+				out.append(ekey(id)[9..]);
+				out.push(':');
+				format(out, no);
+				out.push(':');
+				out.append(ln[..min(ln.len, 200)]);
+				out.push('\n');
+				shown += 1;
+			}
+		}
+	}
+	var lo byte[>..] = [];
+	lower_into(out[..], lo);
+	var le byte[>..] = [];
+	lower_into(ex, le);
+	GREP_HIT = find(lo[..], le[..]) >= 0;
+	out.len
+}
 fn run_bench(tsv const byte[:]) {
 	var raw byte[>..] = [];
 	if !read_file(tsv, raw) { write_stderr("[atex bench] cannot read question file\n"); return; }
@@ -1692,6 +2081,12 @@ fn run_bench(tsv const byte[:]) {
 	var w_sum = 0;
 	var l_hit = 0;
 	var x_hit = 0;
+	var t_first = 0;
+	var t_hit = 0;
+	var t_sum = 0;
+	var t_full = 0;
+	var g_first = 0;
+	var g_full = 0;
 	var rows byte[>..] = [];
 	for ln in split(raw[..], '\n') {
 		if ln.len == 0 || ln[0] == '#' { continue; }
@@ -1725,6 +2120,19 @@ fn run_bench(tsv const byte[:]) {
 			}
 		}
 		if lo { l_hit += 1; }
+		let wr = where_text(q, DEF_K, "");
+		var tc = wr.len;
+		var th = find(wr[..], ex) >= 0;
+		if th { t_first += 1; }
+		var hop = 0;
+		while !th && hop < min(WH_ID.len, 1) {
+			let fq = file_query_text(ekey(WH_ID[hop]), entry_text(WH_ID[hop]), q, DEF_MC);
+			tc += fq.len;
+			th = find(fq[..], ex) >= 0;
+			hop += 1;
+		}
+		if th { t_hit += 1; }
+		t_sum += tc;
 		let xr = exact_text(ex, DEF_K, DEF_MC, 1);
 		let xh = find(xr[..], ex) >= 0;
 		if xh { x_hit += 1; }
@@ -1744,6 +2152,10 @@ fn run_bench(tsv const byte[:]) {
 		a_sum += res.len;
 		f_sum += fc;
 		w_sum += wc;
+		t_full += tc + (if th { 0 } else { wc });
+		let gc = grep_route(q, ex);
+		if GREP_HIT { g_first += 1; }
+		g_full += gc + (if GREP_HIT { 0 } else { wc });
 		if rows.len > 0 { rows.push(','); }
 		rows.append("\n{\"query\":");
 		json::format_string(rows, q);
@@ -1759,10 +2171,14 @@ fn run_bench(tsv const byte[:]) {
 		format(rows, fc);
 		rows.append(",\"window41_chars\":");
 		format(rows, wc);
+		rows.append(",\"tier_chars\":");
+		format(rows, tc);
+		rows.append(",\"tier_has_answer\":");
+		rows.append(if th { "true" } else { "false" });
 		rows.append("}");
 	}
 	var out byte[>..] = [];
-	out.append("{\"engine\":\"atex 0.3.5\",\"k\":");
+	out.append("{\"engine\":\"atex 0.3.6\",\"k\":");
 	format(out, DEF_K);
 	out.append(",\"max_chars\":");
 	format(out, DEF_MC);
@@ -1782,6 +2198,18 @@ fn run_bench(tsv const byte[:]) {
 	format(out, f_sum);
 	out.append(",\"window41_total_chars\":");
 	format(out, w_sum);
+	out.append(",\"tier_first_hits\":");
+	format(out, t_first);
+	out.append(",\"tier_answer_hits\":");
+	format(out, t_hit);
+	out.append(",\"tier_total_chars\":");
+	format(out, t_sum);
+	out.append(",\"tier_route_chars\":");
+	format(out, t_full);
+	out.append(",\"grep_first_hits\":");
+	format(out, g_first);
+	out.append(",\"grep_route_chars\":");
+	format(out, g_full);
 	out.append(",\"rows\":[");
 	out.append(rows[..]);
 	out.append("\n]}\n");
@@ -1797,11 +2225,11 @@ fn main() {
 	while i < av.len {
 		let a = av[i];
 		if a == "--version" || a == "-v" {
-			write_stdout("atex 0.3.5 (gold/helium-native)\n");
+			write_stdout("atex 0.3.6 (gold/helium-native)\n");
 			flush_stdout();
 			return;
 		} else if a == "--help" || a == "-h" || a == "help" {
-			write_stdout("atex 0.3.5 (gold/helium-native)\nUsage:\n  atex [serve] [--atex-dir <dir>]     Run MCP stdio server\n  atex init [project_dir] [--atex-dir <dir>]  Index project docs & code into KB\n  atex install [--atex-dir <dir>]     Auto-wire Claude, Cursor, Windsurf, Gemini, Codex\n  atex stats [--atex-dir <dir>]       Print knowledge base statistics\n  atex bench <questions.tsv>          Measure answer recall and output size vs whole-file reads\n  atex --selftest                     Run end-to-end TexGrid & byte-page self-test\n");
+			write_stdout("atex 0.3.6 (gold/helium-native)\nUsage:\n  atex [serve] [--atex-dir <dir>]     Run MCP stdio server\n  atex init [project_dir] [--atex-dir <dir>]  Index project docs & code into KB\n  atex install [--atex-dir <dir>]     Auto-wire Claude, Cursor, Windsurf, Gemini, Codex\n  atex stats [--atex-dir <dir>]       Print knowledge base statistics\n  atex bench <questions.tsv>          Measure answer recall and output size vs whole-file reads\n  atex --selftest                     Run end-to-end TexGrid & byte-page self-test\n");
 			flush_stdout();
 			return;
 		} else if a == "--selftest" || a == "selftest" {
@@ -1859,14 +2287,14 @@ fn main() {
 			var out byte[>..] = [];
 			out.append("{\"jsonrpc\":\"2.0\",");
 			write_id(out, d, id_node);
-			out.append(",\"result\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"atex-gold\",\"version\":\"0.3.5\"}}}\n");
+			out.append(",\"result\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"atex-gold\",\"version\":\"0.3.6\"}}}\n");
 			write_stdout(out[..]);
 			flush_stdout();
 		} else if m == "tools/list" {
 			var out byte[>..] = [];
 			out.append("{\"jsonrpc\":\"2.0\",");
 			write_id(out, d, id_node);
-			out.append(",\"result\":{\"tools\":[{\"name\":\"atex_search\",\"description\":\"Keyword search over the local atex knowledge base. Returns each matching key with a line range, the best-matching lines, and an also: list of every other matching line number. A footer enumerates all remaining matching keys; pass page=N for the next set. exact=true scans all stored text for a literal case-insensitive string and returns key:line rows. Try it before reading whole files.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\",\"description\":\"Search keywords\"},\"k\":{\"type\":\"integer\",\"default\":3},\"max_chars\":{\"type\":\"integer\",\"default\":600},\"page\":{\"type\":\"integer\",\"default\":1},\"exact\":{\"type\":\"boolean\",\"default\":false}},\"required\":[\"query\"]}},{\"name\":\"atex_recall\",\"description\":\"Exact-key lookup in the atex knowledge base. Returns the stored text, or the line range given by lines=a-b (as shown by atex_search). Truncated output names the exact remaining line range.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"key\":{\"type\":\"string\"},\"max_chars\":{\"type\":\"integer\",\"default\":2400},\"lines\":{\"type\":\"string\",\"description\":\"Line range a-b\"}},\"required\":[\"key\"]}},{\"name\":\"atex_remember\",\"description\":\"Persist a learned fact to the atex knowledge base under namespace manual::.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"key\":{\"type\":\"string\"},\"text\":{\"type\":\"string\"}},\"required\":[\"key\",\"text\"]}},{\"name\":\"atex_list_keys\",\"description\":\"List keys in the atex KB matching a prefix.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"prefix\":{\"type\":\"string\",\"default\":\"\"},\"max\":{\"type\":\"integer\",\"default\":50}}}},{\"name\":\"atex_stats\",\"description\":\"Get atex KB statistics and unbiased context tracker report path for the current conversation.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{}}}]}}\n");
+			out.append(",\"result\":{\"tools\":[{\"name\":\"atex_search\",\"description\":\"Keyword search over the local atex knowledge base. Returns each matching key with a line range, the best-matching lines, and an also: list of every other matching line number. A footer enumerates all remaining matching keys; pass page=N for the next set. exact=true scans all stored text for a literal case-insensitive string and returns key:line rows. Try it before reading whole files.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\",\"description\":\"Search keywords\"},\"k\":{\"type\":\"integer\",\"default\":3},\"max_chars\":{\"type\":\"integer\",\"default\":600},\"page\":{\"type\":\"integer\",\"default\":1},\"exact\":{\"type\":\"boolean\",\"default\":false}},\"required\":[\"query\"]}},{\"name\":\"atex_where\",\"description\":\"Find which files hold something. Call this first instead of grep: it returns ranked file keys with matching line numbers and one best line each, always current with the files on disk. Follow up with atex_recall(key, query) for just the matching lines in one file.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\"},\"k\":{\"type\":\"integer\",\"default\":3},\"path\":{\"type\":\"string\",\"description\":\"Only files under this folder\"}},\"required\":[\"query\"]}},{\"name\":\"atex_recall\",\"description\":\"Exact-key lookup in the atex knowledge base. Returns the stored text, or the line range given by lines=a-b (as shown by atex_search). Truncated output names the exact remaining line range.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"key\":{\"type\":\"string\"},\"max_chars\":{\"type\":\"integer\",\"default\":2400},\"lines\":{\"type\":\"string\",\"description\":\"Line range a-b\"},\"query\":{\"type\":\"string\",\"description\":\"Return only the lines in this entry that match\"}},\"required\":[\"key\"]}},{\"name\":\"atex_remember\",\"description\":\"Persist a learned fact to the atex knowledge base under namespace manual::.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"key\":{\"type\":\"string\"},\"text\":{\"type\":\"string\"}},\"required\":[\"key\",\"text\"]}},{\"name\":\"atex_list_keys\",\"description\":\"List keys in the atex KB matching a prefix.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"prefix\":{\"type\":\"string\",\"default\":\"\"},\"max\":{\"type\":\"integer\",\"default\":50}}}},{\"name\":\"atex_stats\",\"description\":\"Get atex KB statistics and unbiased context tracker report path for the current conversation.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{}}}]}}\n");
 			write_stdout(out[..]);
 			flush_stdout();
 		} else if m == "ping" {
@@ -1886,10 +2314,17 @@ fn main() {
 			break;
 		} else if m == "tools/call" {
 			kb_refresh();
+			kb_sweep();
 			let p = json::member(d, root, "params");
 			let tname, _ = json::as_string(d, json::member(d, p, "name"));
 			let args_node = json::member(d, p, "arguments");
-			if tname == "atex_search" {
+			if tname == "atex_where" {
+				let q, _ = json::as_string(d, json::member(d, args_node, "query"));
+				let kv, okk = json::as_i64(d, json::member(d, args_node, "k"));
+				let pv, okp = json::as_string(d, json::member(d, args_node, "path"));
+				let res = where_text(q, if okk { kv } else { DEF_K }, if okp { pv } else { "" });
+				send_ok_text(d, id_node, res[..], false);
+			} else if tname == "atex_search" {
 				let q, _ = json::as_string(d, json::member(d, args_node, "query"));
 				let kv, okk = json::as_i64(d, json::member(d, args_node, "k"));
 				let mv, okm = json::as_i64(d, json::member(d, args_node, "max_chars"));
@@ -1904,15 +2339,19 @@ fn main() {
 				let key, _ = json::as_string(d, json::member(d, args_node, "key"));
 				let mv, okm = json::as_i64(d, json::member(d, args_node, "max_chars"));
 				let lv, okl = json::as_string(d, json::member(d, args_node, "lines"));
+				let qv, okq = json::as_string(d, json::member(d, args_node, "query"));
 				let mc = if okm { mv } else { 2400 };
 				if !valid_key(key) {
 					send_err(d, id_node, -32602, "tool atex_recall invalid input: invalid key");
-				} else if !(kfind(key) >= 0) {
+				} else if kfind(key) < 0 || ENTRIES[kfind(key)].len == 0 {
 					send_ok_text(d, id_node, "(not found)", true);
 				} else {
 					let id = kfind(key);
 					let txt = entry_text(id);
-					if okl && lv.len > 0 {
+					if okq && qv.len > 0 {
+						let res = file_query_text(key, txt, qv, if okm { mv } else { DEF_MC });
+						send_ok_text(d, id_node, res[..], false);
+					} else if okl && lv.len > 0 {
 						var res byte[>..] = [];
 						var sl byte[>..] = [];
 						if slice_lines(txt, lv, sl) {
@@ -1971,7 +2410,7 @@ fn main() {
 				var cnt = 0;
 				for i in 0..ENTRIES.len {
 					let k = ekey(i);
-					if k.len >= pref.len && k[..pref.len] == pref {
+					if ENTRIES[i].len > 0 && k.len >= pref.len && k[..pref.len] == pref {
 						if cnt > 0 { res.push('\n'); }
 						res.append(k);
 						cnt += 1;

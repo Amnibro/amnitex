@@ -1,4 +1,4 @@
-# atex (amni-tex) — Native Gold/Helium Edition (v0.3.5)
+# atex (amni-tex) — Native Gold/Helium Edition (v0.3.6)
 
 **A lossless local byte-page memory layer for MCP-capable AI coding assistants. It also stores every conversation turn so earlier facts can be recalled exactly.**
 Written in [Gold](https://github.com/Amnibro/gold) and compiled to native [Helium](https://github.com/Amnibro/helium). Local. No embeddings. No cloud. MIT-licensed. Exact-match nonce lookup through an RGBA texture LUT (`index.tex`): a 15 MB knowledge base loads in 22 ms.
@@ -72,6 +72,17 @@ Reproducible via `./bench_conv_lut_bin` (`bench_conv_lut.gold`, 200 simulated tu
 - **Exact fact recall at turn 200:** `20/20` measured from the atex store (keyword-overlap queries). The `2/20` for lossy summaries is modeled, not measured
 - Interactive charts & full writeup: **[amni-scient.com/amnitex-lut.html](https://amni-scient.com/amnitex-lut.html)**
 
+### Replay of real sessions
+
+The table above is a simulation. To check the idea against real work, we replayed the token usage logged by 20 long Claude Code sessions and modeled what each API call would have sent:
+
+| What is cleared | Input saved | If each fresh turn also re-reads 30K tokens |
+|---|---:|---:|
+| Earlier turns, replaced by a 1.1K-token state card | 41% | 31% |
+| Earlier turns, plus all but the last 3 tool results inside a turn | 61% | 50% |
+
+These are modeled, not live runs, and the session logs are private, so they cannot be reproduced from this repository. Most of those tokens were already prompt-cache reads, so a bill would fall by a different amount. Long changes grow inside a single turn as well as across turns, so clearing only between turns leaves much of the cost in place. Today, clearing depends on the client: in Claude Code, run `/clear`; hooks cannot remove earlier messages on their own.
+
 ### Nonce texture LUT (v0.3.3)
 
 Every unique word, symbol and compound identifier (`snake_case`, `dotted.names`, `kebab-case`, plus their parts) gets a sequential 32-bit nonce. Each nonce's entry list is packed into `index.tex`, an RGBA texture (4096 texels wide, one 32-bit value per texel): an offset table, then a postings table. Lookup is word → nonce → offset texel → postings run, with exact matches and no hash-cell collisions. On startup, atex loads the texture directly and rebuilds it only when the KB changes.
@@ -110,6 +121,19 @@ It compares chars returned with reading the whole file or a 41-line window aroun
 The 15 MB KB is a snapshot indexed before two held-out answers were written, so those strings are not stored there; exact mode finds every answer that is stored.
 
 Ranking: IDF weights over exact nonces, a passage re-rank (query terms found within ±1 line), a bonus for definition lines, plural/`-ies`/`-ed`/`-er` stemming, a code-vocabulary map (directory→dir, environment→env, python→py …), phrase nonces, confidence ordering, line-range snippets, and generated `.amni` files skipped when their `.gold` source is present.
+
+### Find files and lines (v0.3.6)
+
+`atex_where(query)` answers "which files?" with ranked file keys, matching line numbers, and one best line from each. `atex_recall(key, query="...")` then returns only the matching lines in that file.
+
+Results stay current. Folders registered with `atex init <folder>` are checked on each lookup, so edited, new, and deleted files are picked up without re-indexing. A search for an identifier matches the whole identifier; if it exists nowhere, the result says so before listing partial matches.
+
+| Set | Answer in first result: `atex_where` | Answer in first result: modeled grep | Characters: `atex_where` + one `atex_recall` | Characters: modeled grep | Characters: whole files |
+|---|---:|---:|---:|---:|---:|
+| Tuning set (22) | 14/22 | 9/22 | 23,346 | 47,123 | 641,088 |
+| Held-out set (10) | 4/10 | 3/10 | 14,837 | 16,424 | 199,406 |
+
+`atex bench` models grep generously: it picks the rarest word in the question and shows up to 30 matching lines. Either route falls back to a 41-line read at the right spot when the answer has not appeared yet. No live agent is involved and the sets are small, so treat the held-out row as the fairer guide. Results: [`bench/tier_tuning_results.json`](bench/tier_tuning_results.json), [`bench/tier_heldout_results.json`](bench/tier_heldout_results.json).
 
 ### Claude Code turn hooks
 
@@ -196,12 +220,16 @@ The 0.5B model retrieved the validation cookie out of the seeded `atex` knowledg
 | `atex_remember(key, text)`    | You explicitly tell it "remember that X" |
 | `atex_list_keys(prefix, max)` | Discover what is known about an area |
 | `atex_stats()`                | Inspect KB size / fill |
+| `atex_where(query, k, path)`  | Find which files hold something: file keys, line numbers, one best line each |
+| `atex_recall(key, query)`     | Only the lines in one entry that match |
 
 Server-side validation: `atex_remember` keys must match `^[a-zA-Z0-9_\-./:(),'—]{1,256}$`, must not contain `..`, text payload capped at 1 MiB.
 
 Several servers and hooks can share one knowledge base. Each write takes a short lock (`write.lock` in the KB folder) and picks up other writers' changes first, so facts are not lost when sessions write at the same moment. A lock left by a crashed process is cleared after 30 seconds. If a write cannot get the lock within 40 seconds, or the folder is read-only, `atex_remember` returns an error instead of reporting success.
 
 ## Storage format
+
+Pages only grow for now: each changed file is stored again as a new copy, and the space used by the old copy is not reclaimed. To turn on automatic refresh for a knowledge base made before v0.3.6, run `atex init <folder>` once. Your home folder is never registered, so run it on a project folder.
 
 Lossless byte-page key-value store. Pages are mem-mappable; the index is JSON. No proprietary formats, no embedding indices, no ML dependencies.
 

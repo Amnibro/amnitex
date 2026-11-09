@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.3.6] — 2026-11-09
+
+### Added
+
+- `atex_where` finds which files hold something, returning file keys, line numbers, and one best line each, with a per-folder count when more files match.
+- `atex_recall(key, query="...")` returns only the matching lines in one entry.
+- Folders registered with `atex init <folder>` stay current: edited, new, and deleted files are picked up on each lookup without re-indexing. The check backs off on large trees, and your home folder is never registered.
+- `atex bench` now reports the new route and a modeled grep route.
+- More file types are indexed, including `.tsx`, `.jsx`, `.mjs`, `.cpp`, `.html`, `.css`, and `.sql`.
+
+### Changed
+
+- Searching for an identifier now matches the whole identifier instead of its parts. If it exists nowhere, `atex_where` says so before listing partial matches.
+- Re-running `atex init` only stores files that changed.
+- Deleted files no longer appear in `atex_recall` or `atex_list_keys`.
+
 ## [0.3.5] — 2026-11-09
 
 ### Fixed
