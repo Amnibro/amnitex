@@ -1,4 +1,4 @@
-# atex (amni-tex) — Native Gold/Helium Edition (v0.4.2)
+# atex (amni-tex) — Native Gold/Helium Edition (v0.4.3)
 
 **A lossless local byte-page memory layer for MCP-capable AI coding assistants. It also stores every conversation turn so earlier facts can be recalled exactly.**
 Written in [Gold](https://github.com/Amnibro/gold) and compiled to native [Helium](https://github.com/Amnibro/helium). Local. No embeddings. No cloud. MIT-licensed. Exact-match nonce lookup through an RGBA texture LUT (`index.tex`): a 15 MB knowledge base loads in 22 ms.
@@ -57,7 +57,7 @@ Every AI coding assistant either forgets your project at session boundaries or r
 
 ### What it saves in real sessions
 
-`atex replay` reads the usage Claude Code logged for each request in your own sessions and models what each setting would have sent, with prompt-cache prices included. It makes no model calls, so it costs nothing to run.
+`atex replay` reads the usage Claude Code logged for each request in your own sessions, shows what fills your context, and models what each setting would have sent, with prompt-cache prices included. It makes no model calls, so it costs nothing to run.
 
 On one person's 20 most recent long sessions (66,241 requests, 18.5B input tokens):
 
@@ -108,8 +108,8 @@ Results stay current. Folders registered with `atex init <folder>` are checked o
 
 | Set | `atex_where` + one `atex_recall` | Whole files | Fewer characters |
 |---|---:|---:|---:|
-| Tuning set (22) | 31,175 | 757,660 | 96% |
-| Held-out set (10) | 21,075 | 371,443 | 94% |
+| Tuning set (22) | 31,044 | 758,002 | 96% |
+| Held-out set (10) | 21,078 | 371,443 | 94% |
 
 Measured with `atex bench <questions.tsv>`, which runs lookups with known answers and no live agent. Counts include a 41-line read at the right spot when the answer has not appeared yet. Results: [`bench/tier_tuning_results.json`](bench/tier_tuning_results.json), [`bench/tier_heldout_results.json`](bench/tier_heldout_results.json).
 

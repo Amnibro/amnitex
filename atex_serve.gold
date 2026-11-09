@@ -1432,7 +1432,7 @@ fn run_doctor() {
 	var hm byte[>..] = [];
 	env("HOME", hm);
 	var fails = 0;
-	write_stdout("atex 0.4.2 (gold/helium-native)\n");
+	write_stdout("atex 0.4.3 (gold/helium-native)\n");
 	if is_dir(str(hm, "/.claude")) {
 		var raw byte[>..] = [];
 		read_file(str(hm, "/.claude/settings.json"), raw);
@@ -2662,7 +2662,7 @@ fn run_bench(tsv const byte[:]) {
 		rows.append("}");
 	}
 	var out byte[>..] = [];
-	out.append("{\"engine\":\"atex 0.4.2\",\"k\":");
+	out.append("{\"engine\":\"atex 0.4.3\",\"k\":");
 	format(out, DEF_K);
 	out.append(",\"max_chars\":");
 	format(out, DEF_MC);
@@ -2701,7 +2701,7 @@ fn run_bench(tsv const byte[:]) {
 	flush_stdout();
 }
 struct RpEv { k int, a int, b int }
-struct RpPol { name byte[>..], cap int, mask int, rho real, win int, trig int, keep int, least int, fresh int, trim int }
+struct RpPol { name byte[>..], cap int, mask int, rho real, win int, trig int, keep int, least int, fresh int, trim int, roll int, lo int, rb int, start int }
 struct RpRes { tok real, rd real, wr real, out real, resets int }
 fn rp_num(d json::Doc&, u int, name const byte[:]) int {
 	let v, ok = json::as_i64(d, json::member(d, u, name));
@@ -2710,10 +2710,12 @@ fn rp_num(d json::Doc&, u int, name const byte[:]) int {
 fn rp_cappable(n const byte[:]) int {
 	if n == "Bash" { 1 } else if (n == "WebFetch" || n == "WebSearch" || starts_with(n, "mcp__")) && !starts_with(n, "mcp__amnitex") { 2 } else { 0 }
 }
-fn rp_parse(raw const byte[:], ev RpEv[>..]&) {
+fn rp_mixkind(n const byte[:]) int { if n == "Bash" { 5 } else if n == "Read" { 7 } else if n == "Grep" || n == "Glob" { 8 } else if n == "WebFetch" || n == "WebSearch" || starts_with(n, "mcp__") { 9 } else if n == "Agent" || n == "Task" { 10 } else { 11 } }
+fn rp_parse(raw const byte[:], ev RpEv[>..]&, mix real[>..]&) {
 	var ld = json::Doc {};
 	var last_id byte[>..] = [];
 	var tools = dictionary<uint, int> {};
+	var kinds = dictionary<uint, int> {};
 	for ln in split(raw, '\n') {
 		if find(ln, "\"type\":\"user\"") < 0 && find(ln, "\"type\":\"assistant\"") < 0 { continue; }
 		let r, _ = json::parse(ln, ld);
@@ -2741,12 +2743,23 @@ fn rp_parse(raw const byte[:], ev RpEv[>..]&) {
 					let nm, _ = json::as_string(ld, json::member(ld, it, "name"));
 					let inp = json::member(ld, it, "input");
 					insert(tools, hash(tid), if nm == "Read" && json::member(ld, inp, "limit") < 0 && json::member(ld, inp, "offset") < 0 { 4 } else { rp_cappable(nm) });
+					insert(kinds, hash(tid), rp_mixkind(nm));
+					var ib byte[>..] = [];
+					je_emit(ld, inp, ib, -1);
+					mix[if nm == "Edit" || nm == "Write" || nm == "MultiEdit" || nm == "NotebookEdit" { 3 } else { 4 }] += ib.len as real;
+				} else if bt == "text" {
+					let tx, _ = json::as_string(ld, json::member(ld, it, "text"));
+					mix[1] += tx.len as real;
+				} else if bt == "thinking" {
+					let th, _ = json::as_string(ld, json::member(ld, it, "thinking"));
+					let sg, _ = json::as_string(ld, json::member(ld, it, "signature"));
+					mix[2] += (th.len + sg.len) as real;
 				}
 			}
 		} else {
 			let s, isstr = json::as_string(ld, ct);
 			var real_text = false;
-			if isstr { let t = trim(s); real_text = t.len > 0 && !starts_with(t, "<command") && !starts_with(t, "<local-command") && !starts_with(t, "Caveat:") && !starts_with(t, "<system-reminder"); } else {
+			if isstr { let t = trim(s); real_text = t.len > 0 && !starts_with(t, "<command") && !starts_with(t, "<local-command") && !starts_with(t, "Caveat:") && !starts_with(t, "<system-reminder"); mix[0] += t.len as real; } else {
 				for i in 0..json::count(ld, ct) {
 					let it = json::element(ld, ct, i);
 					let bt, _ = json::as_string(ld, json::member(ld, it, "type"));
@@ -2757,9 +2770,11 @@ fn rp_parse(raw const byte[:], ev RpEv[>..]&) {
 						var n = if okc { cs.len } else { 0 };
 						if !okc { for j in 0..json::count(ld, c) { let tx, okt = json::as_string(ld, json::member(ld, json::element(ld, c, j), "text")); if okt { n += tx.len; } } }
 						ev.push(RpEv { k: 1, a: n, b: get(tools, hash(tid), 0) });
+						mix[get(kinds, hash(tid), 11)] += n as real;
 					} else if bt == "text" {
 						let tx, _ = json::as_string(ld, json::member(ld, it, "text"));
 						let t = trim(tx);
+						mix[0] += t.len as real;
 						if t.len > 0 && !starts_with(t, "<command") && !starts_with(t, "<local-command") && !starts_with(t, "Caveat:") && !starts_with(t, "<system-reminder") { real_text = true; }
 					}
 				}
@@ -2776,13 +2791,14 @@ fn rp_sim(ev const RpEv[:], p const RpPol&, r real, post int, base int) RpRes {
 	var last = 0;
 	var live int[>..] = [];
 	var live0 = 0;
+	let tr = if p.start > 0 { max(0, base - p.start) } else { p.trim };
 	for e in ev {
 		if e.k == 2 {
 			if p.fresh > 0 && last > 0 {
 				removed = max(0, last - base - p.fresh);
 				live.clear();
 				live0 = 0;
-				prev = min(prev, base - p.trim);
+				prev = min(prev, base - tr);
 				t.resets += 1;
 			}
 		} else if e.k == 1 {
@@ -2794,31 +2810,39 @@ fn rp_sim(ev const RpEv[:], p const RpPol&, r real, post int, base int) RpRes {
 			live.push(tk);
 		} else {
 			if rp_is_drop(last, e.a) {
-				removed = 0;
-				live.clear();
-				live0 = 0;
-				prev = base - p.trim;
+				if p.roll > 0 { removed = max(0, e.a - (prev + tr)); } else {
+					removed = 0;
+					live.clear();
+					live0 = 0;
+					prev = base - tr;
+				}
 			}
 			last = e.a;
-			var c = max(e.a - removed, min(e.a, base)) - p.trim;
-			if p.win > 0 && c > p.win {
+			var c = max(e.a - removed, min(e.a, base)) - tr;
+			if p.roll > 0 && c > base - tr + p.roll {
+				t.resets += 1;
+				let held = base + p.lo + p.rb;
+				removed = max(0, e.a - held);
+				c = min(e.a, held) - tr;
+				prev = base - tr;
+			} else if p.win > 0 && c > p.win {
 				t.rd += c as real;
 				t.tok += c as real;
 				t.out += 8000.0;
 				t.resets += 1;
 				removed = max(0, e.a - post);
-				c = min(e.a, post) - p.trim;
+				c = min(e.a, post) - tr;
 				live.clear();
 				live0 = 0;
-				prev = base - p.trim;
+				prev = base - tr;
 			} else if p.trig > 0 && c > p.trig && live.len - p.keep > live0 {
 				var sum = 0;
 				for i in live0..live.len - p.keep { sum += live[i]; }
 				if sum >= p.least {
 					removed += sum;
-					c = max(c - sum, base - p.trim);
+					c = max(c - sum, base - tr);
 					live0 = live.len - p.keep;
-					prev = min(prev, base - p.trim);
+					prev = min(prev, base - tr);
 					t.resets += 1;
 				}
 			}
@@ -2831,7 +2855,8 @@ fn rp_sim(ev const RpEv[:], p const RpPol&, r real, post int, base int) RpRes {
 	t
 }
 fn rp_cost(t const RpRes&, w real) real { t.rd * 0.05 + t.wr * w + t.out * 5.0 }
-fn rp_pol(name const byte[:], cap int, mask int, win int, trig int, fresh int, trim int) RpPol { RpPol { name: str(name), cap: cap * 1000, mask: mask, rho: 0.3, win: win * 1000, trig: trig * 1000, keep: 3, least: 20000, fresh: fresh, trim: trim * 1000 } }
+fn rp_pol(name const byte[:], cap int, mask int, win int, trig int, fresh int, trim int) RpPol { RpPol { name: str(name), cap: cap * 1000, mask: mask, rho: 0.3, win: win * 1000, trig: trig * 1000, keep: 3, least: 20000, fresh: fresh, trim: trim * 1000, roll: 0, lo: 0, rb: 0, start: 0 } }
+fn rp_roll(name const byte[:], hi int, lo int, rb int, start int) RpPol { RpPol { name: str(name), cap: 0, mask: 0, rho: 0.3, win: 0, trig: 0, keep: 3, least: 20000, fresh: 0, trim: 0, roll: hi * 1000, lo: lo * 1000, rb: rb * 1000, start: start * 1000 } }
 fn run_replay(dir0 const byte[:]) {
 	var dir = str(dir0);
 	if dir.len == 0 { var hm byte[>..] = []; env("HOME", hm); dir = str(hm, "/.claude/projects"); }
@@ -2851,16 +2876,23 @@ fn run_replay(dir0 const byte[:]) {
 	var sessions RpEv[>..][>..] = [];
 	var raw byte[>..] = [];
 	var scanned = 0;
+	var mix real[>..] = [];
+	for i in 0..12 { mix.push(0.0); }
 	for o in order {
 		if sessions.len >= 20 { break; }
 		raw.clear();
 		if !read_file(files[o][..], raw) { continue; }
 		scanned += 1;
 		var ev RpEv[>..] = [];
-		rp_parse(raw[..], ev);
+		var m real[>..] = [];
+		for i in 0..12 { m.push(0.0); }
+		rp_parse(raw[..], ev, m);
 		var calls = 0;
 		for e in ev { if e.k == 0 { calls += 1; } }
-		if calls >= 300 { sessions.push(copy(ev)); }
+		if calls >= 300 {
+			sessions.push(copy(ev));
+			for i in 0..12 { mix[i] += m[i]; }
+		}
 	}
 	raw.clear();
 	var ratios real[>..] = [];
@@ -2868,6 +2900,8 @@ fn run_replay(dir0 const byte[:]) {
 	var bases int[>..] = [];
 	var calls = 0;
 	var turns = 0;
+	var grown = 0.0;
+	var made = 0.0;
 	for ev in sessions {
 		var last = 0;
 		var out = 0;
@@ -2878,6 +2912,8 @@ fn run_replay(dir0 const byte[:]) {
 			if e.k == 1 { chars += e.a; } else if e.k == 2 { turns += 1; clean = false; } else {
 				calls += 1;
 				base = if base == 0 { e.a } else { min(base, e.a) };
+				made += e.b as real;
+				if !rp_is_drop(last, e.a) && last > 0 { grown += max(0, e.a - last) as real; }
 				if rp_is_drop(last, e.a) { posts.push(e.a); }
 				else if last > 0 && clean && chars >= 20000 { ratios.push((e.a - last - out) as real / chars as real); }
 				last = e.a;
@@ -2910,6 +2946,12 @@ fn run_replay(dir0 const byte[:]) {
 	pols.push(rp_pol("fresh turn, 30K re-read", 0, 0, 0, 0, 31100, 0));
 	pols.push(rp_pol("cap Bash 2K, compact 250K, fresh 10K", 2, 1, 250, 0, 11100, 0));
 	pols.push(rp_pol("cap Bash 2K, compact 250K, fresh 30K", 2, 1, 250, 0, 31100, 0));
+	pols.push(rp_pol("cap Bash 2K, compact 250K, start -25K", 2, 1, 250, 0, 0, 25));
+	for st in [0, 30, 15, 8] {
+		for s in [[80, 10, 5], [40, 10, 5], [20, 5, 5], [40, 10, 15]] {
+			pols.push(rp_roll(str("cut +", s[0], "K to +", s[1], "K, back ", s[2], "K, start ", if st > 0 { str(st, "K") } else { str("now") })[..], s[0], s[1], s[2], st));
+		}
+	}
 	var totals RpRes[>..] = [];
 	var per real[>..][>..] = [];
 	for k in 0..pols.len { totals.push(RpRes { tok: 0.0, rd: 0.0, wr: 0.0, out: 0.0, resets: 0 }); per.push([]); }
@@ -2932,6 +2974,12 @@ fn run_replay(dir0 const byte[:]) {
 	write_stdout(str("[atex replay] input_tokens=", (totals[0].tok / 1000000.0) as int, "M sessions=", sessions.len, " scanned=", scanned, " calls=", calls, " user_turns=", turns, " tokens_per_char=", fmt(r, 3), " median_start=", med_base, " median_after_compact=", post, "\n")[..]);
 	write_stdout("modeled from logged usage; no model calls. cost uses cache read 0.05x, compaction summary 8K output at 5x, and cache write 1.25x or 2x.\n\npolicy                         input saved   cost saved(1.25x)   cost saved(2x)   median session(2x)   resets\n");
 	let b = totals[0];
+	let names = ["typed by user", "assistant text", "thinking in log", "Edit and Write input", "other tool input", "Bash results", "", "Read results", "Grep and Glob results", "MCP and web results", "Agent results", "other results"];
+	var msum = 0.0;
+	for x in mix { msum += x; }
+	write_stdout(str("\ngrowth=", (grown / 1000000.0) as int, "M output=", (made / 1000000.0) as int, "M avg_context=", (b.tok / max(calls as real, 1.0)) as int, " growth_per_call=", (grown / max(calls as real, 1.0)) as int, " calls_per_turn=", calls / max(turns, 1), " today_reads=", fmt(100.0 * b.rd * 0.05 / max(rp_cost(b, 2.0), 1.0), 1), "% today_writes=", fmt(100.0 * b.wr * 2.0 / max(rp_cost(b, 2.0), 1.0), 1), "%\n")[..]);
+	for i in 0..names.len { if names[i].len > 0 { write_stdout(str(names[i], ": ", fmt(100.0 * mix[i] / max(msum, 1.0), 1), "% (", (mix[i] * r / 1000000.0) as int, "M tokens)\n")[..]); } }
+	write_stdout("\n\"cut +A to +B, back C, start D\" means: when context reaches A above startup, cut it to B above startup, read back C, with a startup size of D.\n\n");
 	for k in 0..pols.len {
 		sort(per[k][..]) { x, y => x < y };
 		let t = totals[k];
@@ -2951,11 +2999,11 @@ fn main() {
 	while i < av.len {
 		let a = av[i];
 		if a == "--version" || a == "-v" {
-			write_stdout("atex 0.4.2 (gold/helium-native)\n");
+			write_stdout("atex 0.4.3 (gold/helium-native)\n");
 			flush_stdout();
 			return;
 		} else if a == "--help" || a == "-h" || a == "help" {
-			write_stdout("atex 0.4.2 (gold/helium-native)\nUsage:\n  atex [serve] [--atex-dir <dir>]     Run MCP stdio server\n  atex init [project_dir] [--atex-dir <dir>]  Index project docs & code into KB\n  atex install [--atex-dir <dir>] [--no-compact-window]  Wire Claude Code, Cursor, Windsurf, Gemini, Codex, Grok\n  atex uninstall                      Remove the wiring; knowledge bases stay\n  atex doctor                         Check the wiring\n  atex replay [projects_dir]          Model what each setting would have saved on your own Claude Code sessions\n  atex stats [--atex-dir <dir>]       Print knowledge base statistics\n  atex bench <questions.tsv>          Measure answer recall and output size vs whole-file reads\n  atex --selftest                     Run end-to-end TexGrid & byte-page self-test\n");
+			write_stdout("atex 0.4.3 (gold/helium-native)\nUsage:\n  atex [serve] [--atex-dir <dir>]     Run MCP stdio server\n  atex init [project_dir] [--atex-dir <dir>]  Index project docs & code into KB\n  atex install [--atex-dir <dir>] [--no-compact-window]  Wire Claude Code, Cursor, Windsurf, Gemini, Codex, Grok\n  atex uninstall                      Remove the wiring; knowledge bases stay\n  atex doctor                         Check the wiring\n  atex replay [projects_dir]          Model what each setting would have saved on your own Claude Code sessions\n  atex stats [--atex-dir <dir>]       Print knowledge base statistics\n  atex bench <questions.tsv>          Measure answer recall and output size vs whole-file reads\n  atex --selftest                     Run end-to-end TexGrid & byte-page self-test\n");
 			flush_stdout();
 			return;
 		} else if a == "--selftest" || a == "selftest" {
@@ -2973,6 +3021,9 @@ fn main() {
 		} else if (cmd == "init" || cmd == "bench" || cmd == "hook" || cmd == "replay") && proj.len == 0 && a[0] != '-' {
 			proj.append(a);
 			i += 1;
+		} else if cmd.len == 0 && a.len > 0 && a[0] != '-' {
+			write_stderr(str("[atex] unknown command: ", a, ". Run atex --help.\n")[..]);
+			exit(2);
 		} else { i += 1; }
 	}
 	if dir.len == 0 { resolve_default_dir(dir); }
@@ -3020,7 +3071,7 @@ fn main() {
 			var out byte[>..] = [];
 			out.append("{\"jsonrpc\":\"2.0\",");
 			write_id(out, d, id_node);
-			out.append(",\"result\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"atex-gold\",\"version\":\"0.4.2\"}}}\n");
+			out.append(",\"result\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"atex-gold\",\"version\":\"0.4.3\"}}}\n");
 			write_stdout(out[..]);
 			flush_stdout();
 		} else if m == "tools/list" {

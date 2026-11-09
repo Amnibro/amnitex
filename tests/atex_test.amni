@@ -309,6 +309,7 @@ fn test_versions(repo const byte[:]) {
 	check("the server reports the same version", vinit.len > 0 && has(slurp(str(T, "/rs")[..])[..], str("\"version\":\"", v, "\"")[..]));
 	run_command(str(quote(BIN[..]), " bench ", quote(str(repo, "/bench/lookup_heldout.tsv")), " --atex-dir ", quote(vkb[..]), " > ", quote(str(T, "/bv")), " 2>/dev/null")[..]);
 	check("atex bench reports the same version", has(slurp(str(T, "/bv")[..])[..], str("\"engine\":\"atex ", v, "\"")[..]));
+	check("an unknown command fails instead of waiting", run_command(str(quote(BIN[..]), " nosuchcommand < /dev/null > /dev/null 2>&1")[..]) != 0);
 	check("no Python is left in the repository", run_command(str("cd ", quote(repo), " && ! git ls-files | grep -q -E '\\.py$|pyproject'")[..]) == 0);
 }
 fn main() {

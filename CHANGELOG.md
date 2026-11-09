@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.4.3] — 2026-11-09
+
+### Added
+
+- `atex replay` now shows what fills your context, and models cutting context during a turn and starting smaller.
+
+### Fixed
+
+- An unknown command now reports an error. It used to start the server and wait.
+
 ## [0.4.2] — 2026-11-09
 
 ### Changed
