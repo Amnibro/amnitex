@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.4.5] — 2026-11-09
+
+### Changed
+
+- `atex run` uses the 5-minute prompt cache, so its cache writes cost 1.25× input instead of 2×. A run calls the model back to back, so the longer cache is not needed. To choose another lifetime, set `CLAUDE_CODE_PROMPT_CACHE_TTL`.
+
 ## [0.4.4] — 2026-11-09
 
 ### Added

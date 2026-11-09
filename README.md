@@ -1,4 +1,4 @@
-# atex (amni-tex) — Native Gold/Helium Edition (v0.4.4)
+# atex (amni-tex) — Native Gold/Helium Edition (v0.4.5)
 
 **A lossless local byte-page memory layer for MCP-capable AI coding assistants. It also stores every conversation turn so earlier facts can be recalled exactly.**
 Written in [Gold](https://github.com/Amnibro/gold) and compiled to native [Helium](https://github.com/Amnibro/helium). Local. No embeddings. No cloud. MIT-licensed. Exact-match nonce lookup through an RGBA texture LUT (`index.tex`): a 15 MB knowledge base loads in 22 ms.
@@ -108,8 +108,8 @@ Results stay current. Folders registered with `atex init <folder>` are checked o
 
 | Set | `atex_where` + one `atex_recall` | Whole files | Fewer characters |
 |---|---:|---:|---:|
-| Tuning set (22) | 26,479 | 763,904 | 97% |
-| Held-out set (10) | 22,768 | 371,443 | 94% |
+| Tuning set (22) | 30,938 | 765,061 | 96% |
+| Held-out set (10) | 22,879 | 371,443 | 94% |
 
 Measured with `atex bench <questions.tsv>`, which runs lookups with known answers and no live agent. Counts include a 41-line read at the right spot when the answer has not appeared yet. Results: [`bench/tier_tuning_results.json`](bench/tier_tuning_results.json), [`bench/tier_heldout_results.json`](bench/tier_heldout_results.json).
 
@@ -143,6 +143,8 @@ atex run --allow-all "Fix the failing tests in src/parser"
 | `-- <flags>` | Passed to `claude`, for example `-- --model sonnet --effort high` |
 
 The final reply goes to standard output, and progress and token counts go to standard error. Each run keeps its prompts, notes and raw logs in `.atex/runs/<id>/`, and saves notes and the result as `run::<id>::part_<n>` and `run::<id>::result`, which `atex_recall` can read later.
+
+A run uses the 5-minute prompt cache. Its cache writes cost 1.25× input instead of the 2× of the 1-hour cache, which is what Claude Code uses on a subscription. Because a run calls the model back to back, the cache stays warm. To choose another lifetime, set `CLAUDE_CODE_PROMPT_CACHE_TTL`.
 
 While a run is going there is no interactive screen and no Remote Control, and nobody can answer the agent's questions. Follow a part with `tail -f` on its log. A cut has a cost: each new part spends calls finding its place again, so a short task costs less with no cuts at all. It needs a POSIX shell, so it does not run on Windows.
 

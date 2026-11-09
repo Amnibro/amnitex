@@ -1432,7 +1432,7 @@ fn run_doctor() {
 	var hm byte[>..] = [];
 	env("HOME", hm);
 	var fails = 0;
-	write_stdout("atex 0.4.4 (gold/helium-native)\n");
+	write_stdout("atex 0.4.5 (gold/helium-native)\n");
 	if is_dir(str(hm, "/.claude")) {
 		var raw byte[>..] = [];
 		read_file(str(hm, "/.claude/settings.json"), raw);
@@ -2677,7 +2677,7 @@ fn run_bench(tsv const byte[:]) {
 		rows.append("}");
 	}
 	var out byte[>..] = [];
-	out.append("{\"engine\":\"atex 0.4.4\",\"k\":");
+	out.append("{\"engine\":\"atex 0.4.5\",\"k\":");
 	format(out, DEF_K);
 	out.append(",\"max_chars\":");
 	format(out, DEF_MC);
@@ -3138,7 +3138,7 @@ fn run_model(extra const byte[:]) byte[>..] {
 	str(" --model ", sh_q(m))
 }
 fn run_claude(flags const byte[:], prompt const byte[:], log const byte[:]) int {
-	run_command(str("claude -p ", flags, " < ", sh_q(prompt), " > ", sh_q(log), " 2> ", sh_q(str(log, ".err")[..]))[..])
+	run_command(str("CLAUDE_CODE_PROMPT_CACHE_TTL=${CLAUDE_CODE_PROMPT_CACHE_TTL:-5m} claude -p ", flags, " < ", sh_q(prompt), " > ", sh_q(log), " 2> ", sh_q(str(log, ".err")[..]))[..])
 }
 fn run_end(t const RunTot&, text const byte[:], rd const byte[:], kb_ok bool, key const byte[:]) int {
 	write_stdout(str(text, "\n")[..]);
@@ -3275,11 +3275,11 @@ fn main() {
 	while i < av.len {
 		let a = av[i];
 		if a == "--version" || a == "-v" {
-			write_stdout("atex 0.4.4 (gold/helium-native)\n");
+			write_stdout("atex 0.4.5 (gold/helium-native)\n");
 			flush_stdout();
 			return;
 		} else if a == "--help" || a == "-h" || a == "help" {
-			write_stdout("atex 0.4.4 (gold/helium-native)\nUsage:\n  atex [serve] [--atex-dir <dir>]     Run MCP stdio server\n  atex init [project_dir] [--atex-dir <dir>]  Index project docs & code into KB\n  atex install [--atex-dir <dir>] [--no-compact-window]  Wire Claude Code, Cursor, Windsurf, Gemini, Codex, Grok\n  atex uninstall                      Remove the wiring; knowledge bases stay\n  atex doctor                         Check the wiring\n  atex replay [projects_dir]          Model what each setting would have saved on your own Claude Code sessions\n  atex run \"<task>\" [--cut <tokens>] [--parts <n>] [--allow-all] [-- <claude flags>]  Run a task in Claude Code in small parts, cutting context between them\n  atex stats [--atex-dir <dir>]       Print knowledge base statistics\n  atex bench <questions.tsv>          Measure answer recall and output size vs whole-file reads\n  atex --selftest                     Run end-to-end TexGrid & byte-page self-test\n");
+			write_stdout("atex 0.4.5 (gold/helium-native)\nUsage:\n  atex [serve] [--atex-dir <dir>]     Run MCP stdio server\n  atex init [project_dir] [--atex-dir <dir>]  Index project docs & code into KB\n  atex install [--atex-dir <dir>] [--no-compact-window]  Wire Claude Code, Cursor, Windsurf, Gemini, Codex, Grok\n  atex uninstall                      Remove the wiring; knowledge bases stay\n  atex doctor                         Check the wiring\n  atex replay [projects_dir]          Model what each setting would have saved on your own Claude Code sessions\n  atex run \"<task>\" [--cut <tokens>] [--parts <n>] [--allow-all] [-- <claude flags>]  Run a task in Claude Code in small parts, cutting context between them\n  atex stats [--atex-dir <dir>]       Print knowledge base statistics\n  atex bench <questions.tsv>          Measure answer recall and output size vs whole-file reads\n  atex --selftest                     Run end-to-end TexGrid & byte-page self-test\n");
 			flush_stdout();
 			return;
 		} else if a == "--selftest" || a == "selftest" {
@@ -3351,7 +3351,7 @@ fn main() {
 			var out byte[>..] = [];
 			out.append("{\"jsonrpc\":\"2.0\",");
 			write_id(out, d, id_node);
-			out.append(",\"result\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"atex-gold\",\"version\":\"0.4.4\"}}}\n");
+			out.append(",\"result\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"atex-gold\",\"version\":\"0.4.5\"}}}\n");
 			write_stdout(out[..]);
 			flush_stdout();
 		} else if m == "tools/list" {

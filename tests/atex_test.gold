@@ -307,7 +307,7 @@ fn run_fake(root const byte[:], replies const byte[>..][:]) {
 	run_command(str("rm -rf ", quote(root))[..]);
 	mkdirs(str(root, "/bin")[..]);
 	let f = str(root, "/bin/claude");
-	write_file(f[..], str("#!/bin/sh\nd=", quote(root), "\nn=$(cat \"$d/n\" 2>/dev/null || echo 0)\nn=$((n+1))\necho $n > \"$d/n\"\necho \"$*\" > \"$d/args.$n\"\ncat > \"$d/in.$n\"\ncat \"$d/out.$n\" 2>/dev/null\nexit $(cat \"$d/rc.$n\" 2>/dev/null || echo 0)\n")[..]);
+	write_file(f[..], str("#!/bin/sh\nd=", quote(root), "\nn=$(cat \"$d/n\" 2>/dev/null || echo 0)\nn=$((n+1))\necho $n > \"$d/n\"\necho \"$*\" > \"$d/args.$n\"\necho \"$CLAUDE_CODE_PROMPT_CACHE_TTL\" > \"$d/ttl.$n\"\ncat > \"$d/in.$n\"\ncat \"$d/out.$n\" 2>/dev/null\nexit $(cat \"$d/rc.$n\" 2>/dev/null || echo 0)\n")[..]);
 	make_exec(f[..]);
 	var i = 1;
 	for r in replies {
@@ -327,6 +327,7 @@ fn test_run() {
 	check("run prints the last part's reply", has(slurp(str(root, "/so")[..])[..], "all done here"));
 	let a1 = slurp(str(root, "/args.1")[..]);
 	check("run starts lean", has(a1[..], "--strict-mcp-config") && has(a1[..], "--setting-sources") && has(a1[..], "--disable-slash-commands") && has(a1[..], "--tools Bash,Read,Edit,Write,Grep,Glob") && has(a1[..], "--max-turns 133"));
+	check("run uses the 5-minute cache", slurp(str(root, "/ttl.1")[..]) == "5m\n" && slurp(str(root, "/ttl.2")[..]) == "5m\n");
 	check("run does not skip permissions unless told", !has(a1[..], "--dangerously-skip-permissions") && has(a1[..], "--permission-mode acceptEdits"));
 	let a2 = slurp(str(root, "/args.2")[..]);
 	check("notes resume the same session for one call", has(a2[..], "--resume sid-1") && has(a2[..], "--max-turns 1"));
@@ -355,6 +356,8 @@ fn test_run() {
 	check("notes that say done end the run", run_go(root[..], "--allow-all --cut 9000 task -- --model haiku --effort 'low'") == 0 && !file_exists(str(root, "/args.3")[..]) && slurp(str(root, "/so")[..]) == "all of it works\n");
 	let a3 = slurp(str(root, "/args.1")[..]);
 	check("--allow-all and passed flags reach claude", has(a3[..], "--dangerously-skip-permissions") && has(a3[..], "--model haiku --effort low") && has(a3[..], "--max-turns 30"));
+	run_fake(root[..], rs[..]);
+	check("a cache setting you chose is kept", run_command(str("CLAUDE_CODE_PROMPT_CACHE_TTL=1h HOME=", quote(root[..]), " PATH=", quote(str(root, "/bin")[..]), ":$PATH ", quote(BIN[..]), " run --atex-dir ", quote(str(root, "/kb")[..]), " task > /dev/null 2>&1")[..]) == 0 && slurp(str(root, "/ttl.1")[..]) == "1h\n");
 	rs.clear();
 	rs.push(str(run_call("m1", 5000), run_end_line("error_max_turns", "true", "max_turns", "")));
 	rs.push(run_end_line("error_max_turns", "true", "max_turns", ""));
