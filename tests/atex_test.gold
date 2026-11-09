@@ -309,6 +309,11 @@ fn test_versions(repo const byte[:]) {
 	for f in ["gemini-extension.json", "manifest.json", "plugin.json", "server.json", ".claude-plugin/plugin.json", ".claude-plugin/marketplace.json", ".grok-plugin/plugin.json", ".grok-plugin/marketplace.json", ".codex-plugin/plugin.json", ".cursor-plugin/plugin.json"] {
 		check(str("version in ", f)[..], has(slurp(str(repo, "/", f)[..])[..], str("\"", v, "\"")[..]));
 	}
+	let vkb = str(T, "/kbv");
+	let vinit = rpc(vkb[..], "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}\n");
+	check("the server reports the same version", vinit.len > 0 && has(slurp(str(T, "/rs")[..])[..], str("\"version\":\"", v, "\"")[..]));
+	run_command(str(quote(BIN[..]), " bench ", quote(str(repo, "/bench/lookup_heldout.tsv")), " --atex-dir ", quote(vkb[..]), " > ", quote(str(T, "/bv")), " 2>/dev/null")[..]);
+	check("atex bench reports the same version", has(slurp(str(T, "/bv")[..])[..], str("\"engine\":\"atex ", v, "\"")[..]));
 	check("no Python is left in the repository", run_command(str("cd ", quote(repo), " && ! git ls-files | grep -q -E '\\.py$|pyproject'")[..]) == 0);
 }
 fn main() {

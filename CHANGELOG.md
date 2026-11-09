@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1] — 2026-11-09
+
+### Fixed
+
+- The MCP server and `atex bench` reported an old version number. Tests now check both.
+- The README no longer points at commands and files that were removed in v0.4.0.
+
 ## [0.4.0] — 2026-11-09
 
 ### Added

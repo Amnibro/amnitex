@@ -1,4 +1,4 @@
-# atex (amni-tex) — Native Gold/Helium Edition (v0.4.0)
+# atex (amni-tex) — Native Gold/Helium Edition (v0.4.1)
 
 **A lossless local byte-page memory layer for MCP-capable AI coding assistants. It also stores every conversation turn so earlier facts can be recalled exactly.**
 Written in [Gold](https://github.com/Amnibro/gold) and compiled to native [Helium](https://github.com/Amnibro/helium). Local. No embeddings. No cloud. MIT-licensed. Exact-match nonce lookup through an RGBA texture LUT (`index.tex`): a 15 MB knowledge base loads in 22 ms.
@@ -130,7 +130,7 @@ It compares chars returned with reading the whole file or a 41-line window aroun
 | Held-out set (10), repo KB | – | 4/10 | 8/10 | 10/10 | 20,545 | 199,732 |
 | Held-out set (10), 15 MB KB | – | 5/10 | 7/10 | 8/10 | 21,729 | 199,732 |
 
-The 15 MB KB is a snapshot indexed before two held-out answers were written, so those strings are not stored there; exact mode finds every answer that is stored.
+The 15 MB KB is a snapshot indexed before two held-out answers were written, so those strings are not stored there; exact mode finds every answer that is stored. These numbers are from v0.3.4 and use the old questions, some about Python code that has since been removed. The next section has current numbers.
 
 Ranking: IDF weights over exact nonces, a passage re-rank (query terms found within ±1 line), a bonus for definition lines, plural/`-ies`/`-ed`/`-er` stemming, a code-vocabulary map (directory→dir, environment→env, python→py …), phrase nonces, confidence ordering, line-range snippets, and generated `.amni` files skipped when their `.gold` source is present.
 
@@ -142,10 +142,10 @@ Results stay current. Folders registered with `atex init <folder>` are checked o
 
 | Set | Answer in first result: `atex_where` | Answer in first result: modeled grep | Characters: `atex_where` + one `atex_recall` | Characters: modeled grep | Characters: whole files |
 |---|---:|---:|---:|---:|---:|
-| Tuning set (22) | 11/22 | 10/22 | 31,491 | 36,129 | 781,335 |
-| Held-out set (10) | 0/10 | 1/10 | 20,877 | 16,412 | 371,443 |
+| Tuning set (22) | 11/22 | 10/22 | 31,737 | 36,558 | 783,582 |
+| Held-out set (10) | 0/10 | 1/10 | 20,942 | 16,414 | 371,443 |
 
-**Compared with reading whole files, this route uses about 94% fewer characters. Compared with grep, the result is mixed:** 13% fewer on the tuning set and 27% more on the held-out set, with few answers in the first result on either route. Do not expect it to beat grep for finding things.
+**Compared with reading whole files, this route uses at least 94% fewer characters. Compared with grep, the result is mixed:** 13% fewer on the tuning set and 28% more on the held-out set, with few answers in the first result on either route. Do not expect it to beat grep for finding things.
 
 `atex bench` models grep generously: it picks the rarest word in the question and shows up to 30 matching lines. Either route falls back to a 41-line read at the right spot when the answer has not appeared yet. No live agent is involved and the sets are small, so treat the held-out row as the fairer guide. In v0.4.0, eight questions that no longer applied (seven about removed Python files, one about a removed path) were replaced with new questions about `atex_serve.gold`, so these numbers are not comparable with v0.3.6. Results: [`bench/tier_tuning_results.json`](bench/tier_tuning_results.json), [`bench/tier_heldout_results.json`](bench/tier_heldout_results.json).
 
@@ -187,7 +187,7 @@ Tex-grid maintains 95-100% recall@1 across four orders of magnitude of corpus si
 
 **Round 2000 retrieves the round-1 fact in 23 microseconds** with the tex-grid. Conversation length does not degrade recall — the data lives in the KB, not the model context window.
 
-Replay: `atex demo --scenario corpus-scale --out scale.json` and `atex demo --scenario long-session --out session.json`.
+These runs used the Python client's `atex demo` command, which was removed in v0.4.0, so they are a record and cannot be replayed now.
 
 ### 20-query smoke (v0.1)
 
@@ -199,7 +199,7 @@ Replay: `atex demo --scenario corpus-scale --out scale.json` and `atex demo --sc
 | avg query latency         | 0.5 ms |              0.05 ms |
 | p99 query latency         | 8.5 ms |               1.0 ms |
 
-Replay: `atex bench`. Full numbers in [`bench_results.md`](bench_results.md), source in `atex/bench/`.
+Full numbers in [`bench_results.md`](bench_results.md). The code for this benchmark was removed with the Python client in v0.4.0, so this is a record and cannot be replayed now.
 
 ## Validated end-to-end with a 0.5B open-source model
 
