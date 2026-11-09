@@ -1,4 +1,4 @@
-# atex (amni-tex) — Native Gold/Helium Edition (v0.3.4)
+# atex (amni-tex) — Native Gold/Helium Edition (v0.3.5)
 
 **A lossless local byte-page memory layer for MCP-capable AI coding assistants. It also stores every conversation turn so earlier facts can be recalled exactly.**
 Written in [Gold](https://github.com/Amnibro/gold) and compiled to native [Helium](https://github.com/Amnibro/helium). Local. No embeddings. No cloud. MIT-licensed. Exact-match nonce lookup through an RGBA texture LUT (`index.tex`): a 15 MB knowledge base loads in 22 ms.
@@ -197,7 +197,9 @@ The 0.5B model retrieved the validation cookie out of the seeded `atex` knowledg
 | `atex_list_keys(prefix, max)` | Discover what is known about an area |
 | `atex_stats()`                | Inspect KB size / fill |
 
-Server-side validation: `atex_remember` keys must match `^[a-zA-Z0-9_\-./:]{1,256}$`, must not contain `..`, text payload capped at 1 MiB.
+Server-side validation: `atex_remember` keys must match `^[a-zA-Z0-9_\-./:(),'—]{1,256}$`, must not contain `..`, text payload capped at 1 MiB.
+
+Several servers and hooks can share one knowledge base. Each write takes a short lock (`write.lock` in the KB folder) and picks up other writers' changes first, so facts are not lost when sessions write at the same moment. A lock left by a crashed process is cleared after 30 seconds. If a write cannot get the lock within 40 seconds, or the folder is read-only, `atex_remember` returns an error instead of reporting success.
 
 ## Storage format
 

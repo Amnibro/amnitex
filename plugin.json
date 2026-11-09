@@ -1,6 +1,6 @@
 {
   "name": "amnitex",
   "displayName": "AmniTex (Native Helium LUT)",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "description": "Lossless local byte-page memory for MCP assistants in native Gold/Helium: exact-match nonce lookup through an RGBA texture LUT; stores every conversation turn for exact recall."
 }

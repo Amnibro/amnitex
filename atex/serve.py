@@ -5,14 +5,16 @@ try:sys.stdout.reconfigure(encoding='utf-8')
 except Exception:pass
 try:sys.stderr.reconfigure(encoding='utf-8')
 except Exception:pass
-from atex.kb import KnowledgeBase,KnowledgeBaseError
+from atex import __version__
+from atex.kb import KnowledgeBaseError
 from atex.retriever import KBRetriever
 _PROTOCOL_VERSION='2024-11-05'
 _SERVER_NAME='atex'
-_SERVER_VERSION='0.1.0'
-_KEY_RE=re.compile(r'^[a-zA-Z0-9_\-./:]{1,256}$')
+_SERVER_VERSION=__version__
+_KEY_PATTERN=r"^[a-zA-Z0-9_\-./:(),'—]{1,256}$"
+_KEY_RE=re.compile(_KEY_PATTERN)
 _MAX_REMEMBER_BYTES=int(__import__('os').environ.get('ATEX_MAX_REMEMBER_BYTES','1048576'))
-_TOOLS=[{'name':'atex_search','description':'Search the local atex knowledge base for entries matching a natural-language query. Returns top-k entries by keyword overlap. Use this BEFORE asking the user to re-explain project context, conventions, or where things are defined.','inputSchema':{'type':'object','properties':{'query':{'type':'string','description':'Natural language query, e.g. "how does authentication work in this codebase"'},'k':{'type':'integer','description':'Number of results (default 5)','default':5}},'required':['query']}},{'name':'atex_recall','description':'Exact-key lookup in the atex knowledge base. Returns the stored text or null if the key does not exist. Useful when you have a specific path or identifier to look up (e.g. project::src/auth.ts).','inputSchema':{'type':'object','properties':{'key':{'type':'string','description':'Exact key (often "project::<rel-path>" or "manual::<topic>")'}},'required':['key']}},{'name':'atex_remember','description':'Persist a user-taught fact to the atex knowledge base under namespace "manual::". Use this when the user explicitly teaches you something they want remembered across sessions ("remember that X works like Y").','inputSchema':{'type':'object','properties':{'key':{'type':'string','description':'Short topic key, will be prefixed with "manual::". E.g. "auth-flow" becomes "manual::auth-flow".'},'text':{'type':'string','description':'The fact/explanation/snippet to remember.'}},'required':['key','text']}},{'name':'atex_list_keys','description':'List all keys in the atex KB matching a prefix. Use to discover what is known about a part of the project (e.g. prefix="project::src/auth").','inputSchema':{'type':'object','properties':{'prefix':{'type':'string','description':'Key prefix to filter by (use empty string for all keys).','default':''},'max':{'type':'integer','description':'Max keys to return (default 50)','default':50}},'required':['prefix']}},{'name':'atex_stats','description':'Get atex KB statistics: number of entries, pages on disk, MB used, etc.','inputSchema':{'type':'object','properties':{}}}]
+_TOOLS=[{'name':'atex_search','description':'Search the local atex knowledge base for entries matching a natural-language query. Returns top-k entries by keyword overlap. Use this BEFORE asking the user to re-explain project context, conventions, or where things are defined.','inputSchema':{'type':'object','properties':{'query':{'type':'string','description':'Natural language query, e.g. "how does authentication work in this codebase"'},'k':{'type':'integer','description':'Number of results (default 5)','default':5}},'required':['query']}},{'name':'atex_recall','description':'Exact-key lookup in the atex knowledge base. Returns the stored text or null if the key does not exist. Useful when you have a specific path or identifier to look up (e.g. project::src/auth.ts).','inputSchema':{'type':'object','properties':{'key':{'type':'string','description':'Exact key (often "project::<rel-path>" or "manual::<topic>")'}},'required':['key']}},{'name':'atex_remember','description':'Persist a user-taught fact to the atex knowledge base under namespace "manual::". Use this when the user explicitly teaches you something they want remembered across sessions ("remember that X works like Y").','inputSchema':{'type':'object','properties':{'key':{'type':'string','description':'Short topic key, will be prefixed with "manual::". E.g. "auth-flow" becomes "manual::auth-flow".'},'text':{'type':'string','description':'The fact/explanation/snippet to remember.'}},'required':['key','text']}},{'name':'atex_list_keys','description':'List all keys in the atex KB matching a prefix. Use to discover what is known about a part of the project (e.g. prefix="project::src/auth").','inputSchema':{'type':'object','properties':{'prefix':{'type':'string','description':'Key prefix to filter by (use empty string for all keys).','default':''},'max':{'type':'integer','description':'Max keys to return (default 50)','default':50}}}},{'name':'atex_stats','description':'Get atex KB statistics: number of entries, pages on disk, MB used, etc.','inputSchema':{'type':'object','properties':{}}}]
 def _send(msg):
     sys.stdout.write(json.dumps(msg)+'\n')
     sys.stdout.flush()
@@ -24,7 +26,7 @@ def _ok(req_id,result):return {'jsonrpc':'2.0','id':req_id,'result':result}
 def _validate_key(key:str)->str:
     if not isinstance(key,str) or not key:raise KnowledgeBaseError('key must be a non-empty string')
     if '..' in key:raise KnowledgeBaseError('key may not contain ".."')
-    if not _KEY_RE.match(key):raise KnowledgeBaseError('key must match ^[a-zA-Z0-9_\\-./:]{1,256}$')
+    if not _KEY_RE.match(key):raise KnowledgeBaseError(f'key must match {_KEY_PATTERN}')
     return key
 def _handle_initialize(req,kb):
     return _ok(req.get('id'),{'protocolVersion':_PROTOCOL_VERSION,'capabilities':{'tools':{}},'serverInfo':{'name':_SERVER_NAME,'version':_SERVER_VERSION}})
@@ -34,6 +36,7 @@ def _handle_tools_call(req,kb,retriever):
     name=p.get('name','')
     args=p.get('arguments') or {}
     try:
+        kb.refresh()
         if name=='atex_search':
             results=retriever.retrieve(args.get('query',''),k=int(args.get('k',5)),max_chars_per=int(args.get('max_chars',600)))
             content=[{'type':'text','text':retriever.format_as_context(results) if results else '(no results)'}]
@@ -48,7 +51,7 @@ def _handle_tools_call(req,kb,retriever):
             text=args.get('text','')
             if not isinstance(text,str):raise KnowledgeBaseError('text must be a string')
             if len(text.encode('utf-8'))>_MAX_REMEMBER_BYTES:raise KnowledgeBaseError(f'text exceeds {_MAX_REMEMBER_BYTES} bytes')
-            full_key=f'manual::{short_key}'
+            full_key=short_key if short_key.startswith(('manual::','conv::')) else f'manual::{short_key}'
             kb.add(full_key,text,meta={'kind':'manual','source':'atex_remember'},allow_overwrite=True)
             kb.flush()
             content=[{'type':'text','text':f'remembered as {full_key} ({len(text)} bytes)'}]
@@ -77,11 +80,11 @@ def run(argv=None)->int:
     atex=Path(args.atex_dir or default_atex_dir())
     if not (atex/'index.json').exists():print(f'[atex serve] ERROR: no index.json at {atex}; run "atex init" first',file=sys.stderr);return 2
     try:
-        kb=KnowledgeBase(atex)
+        retriever=KBRetriever(str(atex))
+        kb=retriever.kb
     except KnowledgeBaseError as exc:
         print(f'[atex serve] ERROR: {exc}',file=sys.stderr)
         return 2
-    retriever=KBRetriever(str(atex))
     log=open(args.log_file,'a',encoding='utf-8') if args.log_file else sys.stderr
     print(f'[atex serve] ready; {len(kb)} entries; tools: {[t["name"] for t in _TOOLS]}',file=log,flush=True)
     for line in sys.stdin:

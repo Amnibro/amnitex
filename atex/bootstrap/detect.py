@@ -31,7 +31,7 @@ def _claude_code()->ClientStatus:
     p=_home()/'.claude.json'
     return ClientStatus(name='claude_code',label='Claude Code (Anthropic CLI)',config_path=p,auto_writable=True,notes='Restart claude after wiring.')
 def _cursor()->ClientStatus:
-    return ClientStatus(name='cursor',label='Cursor',config_path=None,auto_writable=False,notes='Add via Settings > MCP > Add Custom Server (config not auto-writable yet).')
+    return ClientStatus(name='cursor',label='Cursor',config_path=_home()/'.cursor'/'mcp.json',auto_writable=True,notes='Restart Cursor after wiring.')
 def _cline()->ClientStatus:
     if sys.platform=='win32':
         ad=_appdata()

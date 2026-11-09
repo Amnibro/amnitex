@@ -19,7 +19,12 @@ var PAIRS int[>..];
 var OFFS int[>..];
 var PST int[>..];
 var TEX_W = 4096;
-var LAST_MTIME = 0;
+var LAST_SIG = 0 as uint;
+var WRITE_OK = true;
+var LOCK_DEPTH = 0;
+var LOCK_BEAT = 0;
+let LOCK_WAIT_MS = 40000;
+let LOCK_STALE_S = 30;
 var PAGE_W = 4096;
 var PAGE_H = 64;
 var PAGE_BYTES = 1048576;
@@ -243,7 +248,7 @@ fn build_grid() {
 		reset_lut();
 		for i in 0..ENTRIES.len { grid_insert(i, ekey(i), entry_text(i)); }
 		finalize_lut();
-		save_tex();
+		if kb_lock(0) { save_tex(); kb_unlock(); }
 	}
 	GBUILT = true;
 }
@@ -533,9 +538,7 @@ fn flush_index() {
 	out.append("},\"n_entries\":");
 	format(out, ENTRIES.len);
 	out.append(",\"tokenizer\":\"utf-8_bytes\",\"created\":\"2026-11-07T00:00:00Z\"}");
-	let idx_p = str(ADIR, "/index.json");
-	write_file_atomic(idx_p, out[..]);
-	LAST_MTIME = file_mtime(idx_p);
+	if write_file_atomic(str(ADIR, "/index.json"), out[..]) { LAST_SIG = hash(out[..]); } else { WRITE_OK = false; }
 }
 fn ensure_kb_dirs(dir const byte[:]) {
 	if ADIR[..] != dir { ADIR.clear(); ADIR.append(dir); }
@@ -556,14 +559,17 @@ fn load_kb(dir const byte[:]) bool {
 		KARENA.clear();
 		PAGE_BYTES = PAGE_W * PAGE_H * 4;
 		GBUILT = false;
-		flush_index();
+		if kb_lock(LOCK_WAIT_MS) {
+			if !file_exists(idx_path) { flush_index(); }
+			kb_unlock();
+		}
 		return true;
 	}
 	if find(raw[..], "\"entries\"") < 0 {
 		write_stderr("[atex] corrupt index.json\n");
 		return false;
 	}
-	LAST_MTIME = file_mtime(idx_path);
+	LAST_SIG = hash(raw[..]);
 	var r = json::reader(raw[..]);
 	PAGES.clear();
 	PDATA.clear();
@@ -634,7 +640,78 @@ fn valid_key(k const byte[:]) bool {
 	}
 	true
 }
+fn lock_path() byte[>..] { str(ADIR, "/write.lock") }
+fn lock_drop(dir const byte[:]) {
+	delete_file(str(dir, "/owner"));
+	delete_dir(dir);
+}
+fn lock_stale(dir const byte[:]) bool {
+	let m = file_mtime(str(dir, "/owner"));
+	m > 0 && time_ns() / 1000000000 - m > LOCK_STALE_S
+}
+fn kb_lock(wait_ms int) bool {
+	if LOCK_DEPTH > 0 { LOCK_DEPTH += 1; return true; }
+	let lp = lock_path();
+	let mine = str(lp, ".", random_seed());
+	if !make_dir(mine[..]) || !write_file(str(mine, "/owner"), "atex") { return false; }
+	let t0 = clock_ns();
+	var nap = 1;
+	while !rename_file(mine[..], lp[..]) {
+		if lock_stale(lp[..]) {
+			let old = str(lp, ".", random_seed());
+			if rename_file(lp[..], old[..]) {
+				if lock_stale(old[..]) { lock_drop(old[..]); } else { rename_file(old[..], lp[..]); }
+			}
+		}
+		if (clock_ns() - t0) / 1000000 >= wait_ms {
+			lock_drop(mine[..]);
+			return false;
+		}
+		sleep_ms(nap);
+		nap = min(nap * 2, 50);
+	}
+	LOCK_DEPTH = 1;
+	LOCK_BEAT = clock_ns();
+	true
+}
+fn kb_unlock() {
+	LOCK_DEPTH -= 1;
+	if LOCK_DEPTH == 0 {
+		let lp = lock_path();
+		let old = str(lp, ".", random_seed());
+		if rename_file(lp[..], old[..]) { lock_drop(old[..]); }
+	}
+}
+fn kb_beat() {
+	if LOCK_DEPTH > 0 && clock_ns() - LOCK_BEAT > 5000000000 {
+		write_file(str(lock_path(), "/owner"), "atex");
+		LOCK_BEAT = clock_ns();
+	}
+}
+fn kb_refresh() bool {
+	var raw byte[>..] = [];
+	if !read_file(str(ADIR, "/index.json"), raw) || hash(raw[..]) == LAST_SIG { return true; }
+	let d = str(ADIR);
+	load_kb(d[..])
+}
+fn kb_begin() bool {
+	let first = LOCK_DEPTH == 0;
+	if !kb_lock(LOCK_WAIT_MS) {
+		write_stderr("[atex] knowledge base is busy or read-only; nothing was written\n");
+		return false;
+	}
+	if first && !kb_refresh() {
+		kb_unlock();
+		return false;
+	}
+	WRITE_OK = true;
+	true
+}
+fn write_page(p int) {
+	if !write_file_atomic(str(ADIR, "/pages/", PAGES[p].fname), PDATA[p][..]) { WRITE_OK = false; }
+}
 fn put_kb_entry_mem(full_key const byte[:], text const byte[:], src_b int, write_pg bool) {
+	kb_beat();
 	if PAGES.len == 0 {
 		var pg = Page { idx: 0, used: 0, .. };
 		pg.fname.append("page_000000.kb.page");
@@ -643,7 +720,7 @@ fn put_kb_entry_mem(full_key const byte[:], text const byte[:], src_b int, write
 	var p = PAGES.len - 1;
 	ensure_page_loaded(p);
 	if PAGES[p].used + text.len > PAGE_BYTES {
-		if write_pg { write_file(str(ADIR, "/pages/", PAGES[p].fname), PDATA[p][..]); }
+		if write_pg { write_page(p); }
 		p = PAGES.len;
 		var pg = Page { idx: p, used: 0, .. };
 		format(pg.fname, "page_");
@@ -656,7 +733,7 @@ fn put_kb_entry_mem(full_key const byte[:], text const byte[:], src_b int, write
 	let off = PAGES[p].used;
 	for i in 0..text.len { PDATA[p][off + i] = text[i]; }
 	PAGES[p].used += text.len;
-	if write_pg { write_file(str(ADIR, "/pages/", PAGES[p].fname), PDATA[p][..]); }
+	if write_pg { write_page(p); }
 	let sb = if src_b > 0 { src_b } else { text.len };
 	if (kfind(full_key) >= 0) {
 		let id = kfind(full_key);
@@ -664,7 +741,7 @@ fn put_kb_entry_mem(full_key const byte[:], text const byte[:], src_b int, write
 		ENTRIES[id].off = off;
 		ENTRIES[id].len = text.len;
 		ENTRIES[id].src_bytes = sb;
-		if GBUILT { grid_insert(id, full_key, text); }
+		GBUILT = false;
 	} else {
 		let id = ENTRIES.len;
 		let ko = KARENA.len;
@@ -771,6 +848,7 @@ fn walk_index(dir const byte[:], rel const byte[:], depth int) int {
 fn run_init(proj_dir const byte[:], kb_dir const byte[:]) {
 	ensure_kb_dirs(kb_dir);
 	load_kb(kb_dir);
+	if !kb_begin() { return; }
 	var count = 0;
 	var hm byte[>..] = [];
 	if env("HOME", hm) && hm.len > 0 {
@@ -780,9 +858,10 @@ fn run_init(proj_dir const byte[:], kb_dir const byte[:]) {
 	count += walk_index(proj_dir, "", 1);
 	for p in 0..PAGES.len {
 		ensure_page_loaded(p);
-		write_file(str(ADIR, "/pages/", PAGES[p].fname), PDATA[p][..]);
+		write_page(p);
 	}
 	flush_index();
+	kb_unlock();
 	write_stdout(str("[atex init] indexed ", count, " entries (", ENTRIES.len, " total) into ", ADIR, " (gold/helium-native)\n")[..]);
 	flush_stdout();
 }
@@ -930,26 +1009,58 @@ fn run_install(bin_arg const byte[:], kb_dir const byte[:]) {
 	write_stdout(str("[atex install] wired ", wired, " AI clients -> ", bin_path, " (kb=", kb_dir, ")\n")[..]);
 	flush_stdout();
 }
+fn sh_quote(out byte[>..]&, v const byte[:]) {
+	out.push('\'');
+	for c in v {
+		if c == '\'' { out.append("'\\''"); } else { out.push(c); }
+	}
+	out.push('\'');
+}
 fn run_selftest() int {
-	let tdir = "/tmp/atex-selftest-kb";
-	delete_file(str(tdir, "/index.json"));
-	delete_file(str(tdir, "/pages/page_000000.kb.page"));
-	ensure_kb_dirs(tdir);
-	load_kb(tdir);
+	var tmp byte[>..] = [];
+	if !env("TMPDIR", tmp) || tmp.len == 0 { tmp.clear(); tmp.append("/tmp"); }
+	let tdir = str(tmp, "/atex-selftest-", random_seed());
+	ensure_kb_dirs(tdir[..]);
+	load_kb(tdir[..]);
 	save_kb_entry("manual::probe_fact", "PORT_9471_UDP is the primary telemetry port for AmniTex Helium.");
 	let hits = grid_query("telemetry udp port", 3);
 	let ok = hits.len > 0 && ekey(hits[0].id) == "manual::probe_fact" && find(entry_text(hits[0].id), "PORT_9471_UDP") >= 0;
-	delete_file(str(tdir, "/pages/page_000000.kb.page"));
-	delete_file(str(tdir, "/index.json"));
-	delete_dir(str(tdir, "/pages"));
-	delete_dir(str(tdir, "/manual"));
-	delete_dir(tdir);
-	if ok {
-		write_stdout("[atex selftest] PASS (gold/helium-native, recall=1/1, exact_match=true)\n");
+	save_kb_entry("manual::probe_fact", "Replacement giraffe text.");
+	let renewed = find(search_text("giraffe", 3, 600, 1)[..], "Replacement giraffe") >= 0 && find(search_text("telemetry", 3, 600, 1)[..], "no stored entry") >= 0;
+	var self_path byte[>..] = [];
+	arg(0, self_path);
+	var cmd byte[>..] = [];
+	let writers = 8;
+	for i in 0..writers {
+		cmd.append("printf '%s\\n' '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"atex_remember\",\"arguments\":{\"key\":\"writer_");
+		format(cmd, i);
+		cmd.append("\",\"text\":\"writer fact ");
+		format(cmd, i);
+		cmd.append("\"}}}' | ");
+		sh_quote(cmd, self_path[..]);
+		cmd.append(" serve --atex-dir ");
+		sh_quote(cmd, tdir[..]);
+		cmd.append(" >/dev/null 2>&1 &\n");
+	}
+	cmd.append("wait\n");
+	run_command(cmd[..]);
+	load_kb(tdir[..]);
+	var intact = 0;
+	for i in 0..writers {
+		let id = kfind(str("manual::writer_", i)[..]);
+		if id >= 0 && entry_text(id) == str("writer fact ", i)[..] { intact += 1; }
+	}
+	let unlocked = !is_dir(lock_path()[..]);
+	var rm byte[>..] = [];
+	rm.append("rm -rf ");
+	sh_quote(rm, tdir[..]);
+	run_command(rm[..]);
+	if ok && renewed && intact == writers && unlocked {
+		write_stdout(str("[atex selftest] PASS (gold/helium-native, recall=1/1, exact_match=true, concurrent=", intact, "/", writers, ")\n")[..]);
 		flush_stdout();
 		0
 	} else {
-		write_stderr("[atex selftest] FAIL\n");
+		write_stderr(str("[atex selftest] FAIL recall=", ok, " overwrite=", renewed, " concurrent=", intact, "/", writers, " unlocked=", unlocked, "\n")[..]);
 		1
 	}
 }
@@ -998,6 +1109,12 @@ fn clip(out byte[>..]&, s const byte[:], n int) {
 	if s.len > n { out.append(s[..n]); out.append(" [...]"); } else { out.append(s); }
 }
 fn hook_stop(d json::Doc&, root int) {
+	if kb_begin() {
+		save_turn(d, root);
+		kb_unlock();
+	}
+}
+fn save_turn(d json::Doc&, root int) {
 	let tp, okt = json::as_string(d, json::member(d, root, "transcript_path"));
 	let cwd, _ = json::as_string(d, json::member(d, root, "cwd"));
 	if !okt { return; }
@@ -1639,7 +1756,7 @@ fn run_bench(tsv const byte[:]) {
 		rows.append("}");
 	}
 	var out byte[>..] = [];
-	out.append("{\"engine\":\"atex 0.3.4\",\"k\":");
+	out.append("{\"engine\":\"atex 0.3.5\",\"k\":");
 	format(out, DEF_K);
 	out.append(",\"max_chars\":");
 	format(out, DEF_MC);
@@ -1674,16 +1791,15 @@ fn main() {
 	while i < av.len {
 		let a = av[i];
 		if a == "--version" || a == "-v" {
-			write_stdout("atex 0.3.4 (gold/helium-native)\n");
+			write_stdout("atex 0.3.5 (gold/helium-native)\n");
 			flush_stdout();
 			return;
 		} else if a == "--help" || a == "-h" || a == "help" {
-			write_stdout("atex 0.3.4 (gold/helium-native)\nUsage:\n  atex [serve] [--atex-dir <dir>]     Run MCP stdio server\n  atex init [project_dir] [--atex-dir <dir>]  Index project docs & code into KB\n  atex install [--atex-dir <dir>]     Auto-wire Claude, Cursor, Windsurf, Gemini, Codex\n  atex stats [--atex-dir <dir>]       Print knowledge base statistics\n  atex bench <questions.tsv>          Measure answer recall and output size vs whole-file reads\n  atex --selftest                     Run end-to-end TexGrid & byte-page self-test\n");
+			write_stdout("atex 0.3.5 (gold/helium-native)\nUsage:\n  atex [serve] [--atex-dir <dir>]     Run MCP stdio server\n  atex init [project_dir] [--atex-dir <dir>]  Index project docs & code into KB\n  atex install [--atex-dir <dir>]     Auto-wire Claude, Cursor, Windsurf, Gemini, Codex\n  atex stats [--atex-dir <dir>]       Print knowledge base statistics\n  atex bench <questions.tsv>          Measure answer recall and output size vs whole-file reads\n  atex --selftest                     Run end-to-end TexGrid & byte-page self-test\n");
 			flush_stdout();
 			return;
 		} else if a == "--selftest" || a == "selftest" {
-			run_selftest();
-			return;
+			exit(run_selftest());
 		} else if a == "--atex-dir" && i + 1 < av.len {
 			dir.clear();
 			dir.append(av[i + 1]);
@@ -1709,7 +1825,7 @@ fn main() {
 	}
 	if !load_kb(dir[..]) {
 		write_stderr("[atex serve] ERROR: failed to load or create index.json\n");
-		return;
+		exit(1);
 	}
 	if cmd == "bench" { run_bench(proj[..]); return; }
 	if cmd == "hook" { run_hook(proj[..]); return; }
@@ -1737,14 +1853,14 @@ fn main() {
 			var out byte[>..] = [];
 			out.append("{\"jsonrpc\":\"2.0\",");
 			write_id(out, d, id_node);
-			out.append(",\"result\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"atex-gold\",\"version\":\"0.3.4\"}}}\n");
+			out.append(",\"result\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"atex-gold\",\"version\":\"0.3.5\"}}}\n");
 			write_stdout(out[..]);
 			flush_stdout();
 		} else if m == "tools/list" {
 			var out byte[>..] = [];
 			out.append("{\"jsonrpc\":\"2.0\",");
 			write_id(out, d, id_node);
-			out.append(",\"result\":{\"tools\":[{\"name\":\"atex_search\",\"description\":\"Keyword search over the local atex knowledge base. Returns each matching key with a line range, the best-matching lines, and an also: list of every other matching line number. A footer enumerates all remaining matching keys; pass page=N for the next set. exact=true scans all stored text for a literal case-insensitive string and returns key:line rows. Try it before reading whole files.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\",\"description\":\"Search keywords\"},\"k\":{\"type\":\"integer\",\"default\":3},\"max_chars\":{\"type\":\"integer\",\"default\":600},\"page\":{\"type\":\"integer\",\"default\":1},\"exact\":{\"type\":\"boolean\",\"default\":false}},\"required\":[\"query\"]}},{\"name\":\"atex_recall\",\"description\":\"Exact-key lookup in the atex knowledge base. Returns the stored text, or the line range given by lines=a-b (as shown by atex_search). Truncated output names the exact remaining line range.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"key\":{\"type\":\"string\"},\"max_chars\":{\"type\":\"integer\",\"default\":2400},\"lines\":{\"type\":\"string\",\"description\":\"Line range a-b\"}},\"required\":[\"key\"]}},{\"name\":\"atex_remember\",\"description\":\"Persist a learned fact to the atex knowledge base under namespace manual::.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"key\":{\"type\":\"string\"},\"text\":{\"type\":\"string\"}},\"required\":[\"key\",\"text\"]}},{\"name\":\"atex_list_keys\",\"description\":\"List keys in the atex KB matching a prefix.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"prefix\":{\"type\":\"string\",\"default\":\"\"},\"max\":{\"type\":\"integer\",\"default\":50}},\"required\":[\"prefix\"]}},{\"name\":\"atex_stats\",\"description\":\"Get atex KB statistics and unbiased context tracker report path for the current conversation.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{}}}]}}\n");
+			out.append(",\"result\":{\"tools\":[{\"name\":\"atex_search\",\"description\":\"Keyword search over the local atex knowledge base. Returns each matching key with a line range, the best-matching lines, and an also: list of every other matching line number. A footer enumerates all remaining matching keys; pass page=N for the next set. exact=true scans all stored text for a literal case-insensitive string and returns key:line rows. Try it before reading whole files.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\",\"description\":\"Search keywords\"},\"k\":{\"type\":\"integer\",\"default\":3},\"max_chars\":{\"type\":\"integer\",\"default\":600},\"page\":{\"type\":\"integer\",\"default\":1},\"exact\":{\"type\":\"boolean\",\"default\":false}},\"required\":[\"query\"]}},{\"name\":\"atex_recall\",\"description\":\"Exact-key lookup in the atex knowledge base. Returns the stored text, or the line range given by lines=a-b (as shown by atex_search). Truncated output names the exact remaining line range.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"key\":{\"type\":\"string\"},\"max_chars\":{\"type\":\"integer\",\"default\":2400},\"lines\":{\"type\":\"string\",\"description\":\"Line range a-b\"}},\"required\":[\"key\"]}},{\"name\":\"atex_remember\",\"description\":\"Persist a learned fact to the atex knowledge base under namespace manual::.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"key\":{\"type\":\"string\"},\"text\":{\"type\":\"string\"}},\"required\":[\"key\",\"text\"]}},{\"name\":\"atex_list_keys\",\"description\":\"List keys in the atex KB matching a prefix.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"prefix\":{\"type\":\"string\",\"default\":\"\"},\"max\":{\"type\":\"integer\",\"default\":50}}}},{\"name\":\"atex_stats\",\"description\":\"Get atex KB statistics and unbiased context tracker report path for the current conversation.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{}}}]}}\n");
 			write_stdout(out[..]);
 			flush_stdout();
 		} else if m == "ping" {
@@ -1763,8 +1879,7 @@ fn main() {
 			flush_stdout();
 			break;
 		} else if m == "tools/call" {
-			let cur_mt = file_mtime(str(ADIR, "/index.json"));
-			if cur_mt > 0 && cur_mt != LAST_MTIME { load_kb(dir[..]); }
+			kb_refresh();
 			let p = json::member(d, root, "params");
 			let tname, _ = json::as_string(d, json::member(d, p, "name"));
 			let args_node = json::member(d, p, "arguments");
@@ -1833,10 +1948,14 @@ fn main() {
 				let txt, okt = json::as_string(d, json::member(d, args_node, "text"));
 				if !valid_key(skey) || !okt || txt.len > 1048576 {
 					send_err(d, id_node, -32602, "tool atex_remember invalid input");
+				} else if !kb_begin() {
+					send_err(d, id_node, -32000, "knowledge base is busy or read-only; nothing was written");
 				} else {
 					let fk = if starts_with(skey, "manual::") || starts_with(skey, "conv::") { str(skey) } else { str("manual::", skey) };
 					save_kb_entry(fk[..], txt);
-					send_ok_text(d, id_node, str("remembered as ", fk, " (", txt.len, " bytes)")[..], false);
+					kb_unlock();
+					if WRITE_OK { send_ok_text(d, id_node, str("remembered as ", fk, " (", txt.len, " bytes)")[..], false); }
+					else { send_err(d, id_node, -32000, "could not write to the knowledge base directory"); }
 				}
 			} else if tname == "atex_list_keys" {
 				let pref, _ = json::as_string(d, json::member(d, args_node, "prefix"));

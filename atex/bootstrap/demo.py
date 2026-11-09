@@ -32,12 +32,12 @@ def _run_model_validation(args)->int:
 def _seed_dir()->Path:return Path(__file__).resolve().parent.parent/'seed'
 def _seed_kb(atex_dir:Path,verbose:bool=True)->int:
     kb=KnowledgeBase(atex_dir);n=0
-    for f in sorted(_seed_dir().glob('*.txt'))+sorted(_seed_dir().glob('*.md')):
-        key=f'seed::{f.stem}'
-        if key in kb:continue
-        kb.add(key,f.read_text(encoding='utf-8'),meta={'kind':'seed','filename':f.name},allow_overwrite=False)
-        n+=1
-    kb.flush()
+    with kb.locked():
+        for f in sorted(_seed_dir().glob('*.txt'))+sorted(_seed_dir().glob('*.md')):
+            key=f'seed::{f.stem}'
+            if key in kb:continue
+            kb.add(key,f.read_text(encoding='utf-8'),meta={'kind':'seed','filename':f.name},allow_overwrite=False)
+            n+=1
     if verbose:print(f'[atex demo] seeded KB with {n} entry/entries from {_seed_dir()}')
     return n
 def _print_sample_prompts(server_name:str):

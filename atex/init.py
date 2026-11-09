@@ -54,11 +54,11 @@ def run(argv=None)->int:
     print(f'[atex init] ingesting source files from {root}')
     kb=KnowledgeBase(atex)
     n_appended=0
-    for rel,content in _walk(root,set(args.include_ext),args.exclude_dir,args.max_size_bytes):
-        key=f'project::{rel}'
-        kb.add(key,content,meta={'rel':rel,'kind':'source'},allow_overwrite=True)
-        n_appended+=1
-    kb.flush()
+    with kb.locked():
+        for rel,content in _walk(root,set(args.include_ext),args.exclude_dir,args.max_size_bytes):
+            key=f'project::{rel}'
+            kb.add(key,content,meta={'rel':rel,'kind':'source'},allow_overwrite=True)
+            n_appended+=1
     s=kb.stats()
     print(f'\n[atex init] DONE: ingested {n_appended} files')
     print(f'  KB stats: {s["n_entries"]} entries, {s["n_pages"]} pages, {s["used_bytes"]/1e6:.2f} MB on disk')

@@ -2,15 +2,13 @@
 import time
 from pathlib import Path
 from typing import Callable,Dict,List,Optional
-from atex.kb import KnowledgeBase
 from atex.retriever import KBRetriever
 ChatFn=Callable[[str],str]
 class AtexRagClient:
     def __init__(self,atex_dir,chat_fn:ChatFn,k:int=3,max_chars_per:int=600):
         self.atex_dir=Path(atex_dir)
-        self.kb=KnowledgeBase(self.atex_dir)
-        self.retr=KBRetriever.__new__(KBRetriever)
-        self.retr.kb=self.kb
+        self.retr=KBRetriever(self.atex_dir)
+        self.kb=self.retr.kb
         self.chat=chat_fn
         self.k=k
         self.max_chars_per=max_chars_per

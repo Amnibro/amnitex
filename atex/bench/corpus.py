@@ -45,8 +45,8 @@ QUERY_ANSWERS=[
 ]
 def build_corpus(kb):
     n=0
-    for k,v in DOCS.items():
-        kb.add(k,v,meta={'kind':'bench_corpus'},allow_overwrite=True)
-        n+=1
-    kb.flush()
+    with kb.locked():
+        for k,v in DOCS.items():
+            kb.add(k,v,meta={'kind':'bench_corpus'},allow_overwrite=True)
+            n+=1
     return n

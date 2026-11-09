@@ -1,6 +1,6 @@
 {
   "name": "amnitex",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "description": "Lossless local byte-page memory for MCP assistants in native Gold/Helium.",
   "author": {
     "name": "Amniscient, LLC",

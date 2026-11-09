@@ -13,18 +13,15 @@ class TexRetriever:
         self._grid,self._keys=build_from_kb(self.kb,self.grid_w,self.grid_h,self.inline_slots)
         self._dirty=False
     def add(self,key:str,text:str,**kw):
+        existed=key in self.kb
         result=self.kb.add(key,text,**kw)
-        if self._grid is not None and not self._dirty:
-            try:
-                idx=self._keys.index(key)
-            except ValueError:
-                idx=len(self._keys)
-                self._keys.append(key)
-            self._grid.insert(idx,key,text)
-        else:self._dirty=True
+        if self._grid is None or self._dirty or existed:self._dirty=True
+        else:
+            self._keys.append(key)
+            self._grid.insert(len(self._keys)-1,key,text)
         return result
     def retrieve(self,query:str,k:int=3,max_chars_per:int=600)->List[Tuple[str,str,int]]:
-        if self._grid is None or self._dirty:self.build()
+        if self.kb.refresh() or self._grid is None or self._dirty:self.build()
         ranked=self._grid.query(query,k=k)
         out=[]
         for eid,score in ranked:

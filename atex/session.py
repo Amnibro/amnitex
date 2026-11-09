@@ -241,6 +241,9 @@ def _base(slug: str) -> str:
 
 
 def save_turns(kb: KnowledgeBase, slug: str, turns: List[dict]) -> str:
+    with kb.locked():
+        return _save_turns(kb, slug, turns)
+def _save_turns(kb: KnowledgeBase, slug: str, turns: List[dict]) -> str:
     base = _base(slug)
     rendered = []
     for i, turn in enumerate(turns, start=1):

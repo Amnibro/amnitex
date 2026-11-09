@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.3.5] — 2026-11-09
+
+### Fixed
+
+- Lost writes: sessions sharing one knowledge base could silently overwrite each other. Writes now take a lock that works across processes and across the native and Python engines.
+- Missed updates: changes made within the same second went unnoticed by other servers. Servers now compare the index contents.
+- Stale search: after an entry was replaced, a running server could still match its old words.
+- `atex_remember` no longer reports success when the write failed.
+- `atex --selftest` and load failures now exit non-zero, so installers can catch them.
+- The Python server now searches facts remembered in the same session, accepts every key the native server accepts, and no longer stores `manual::manual::`.
+- `curl | sh` install works again; the installer no longer needs a repository checkout.
+
+### Changed
+
+- Native start time on a 1,276-entry knowledge base drops from about 13 ms to 2 ms.
+- `atex --selftest` now checks replaced entries and 8 concurrent writers.
+- Python package and server versions now match the native release.
+
 ## [0.2.1] — 2026-05-01
 
 - Docs correction: README and `corpus_scale_results.json` now reflect the auto-sized tex-grid measurements. The 1M-token recall@1 is **100%** (was reported as 80% from the pre-auto-sizing baseline); speedup vs keyword-scan at 1M is **6075×** (was 3320×). No code changes — `auto_grid_dim()` was already in 0.2.0.

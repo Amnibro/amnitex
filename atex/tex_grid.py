@@ -2,12 +2,9 @@
 Each token hashes to a 2D grid cell; the cell's 4 slots hold up to 4 entry-ids inline; overflow spills to a per-cell list.
 Query cost is independent of corpus size (it scales with the query length, not the KB size).
 """
-import hashlib,re,struct
+import hashlib,struct
 from typing import Dict,List,Optional,Tuple
-_TOK_RE=re.compile(r"[a-zA-Z][a-zA-Z0-9_\-\.]*")
-_STOP=frozenset({'the','a','an','and','or','of','to','in','for','is','are','what','how','do','i','my','this','that','with','on','at','by','as','it','be','can','use','using','from','some','any','have','has','will','would','should','could','make','get','set','put','show','give','tell','please','help'})
-def _tokenize(text:str)->List[str]:
-    return [t.lower() for t in _TOK_RE.findall(text or '') if t.lower() not in _STOP and len(t)>=2]
+from atex.retriever import _tokenize
 def _hash_xy(token:str,w:int,h:int)->Tuple[int,int]:
     digest=hashlib.blake2b(token.encode('utf-8'),digest_size=8).digest()
     n=struct.unpack('<Q',digest)[0]
@@ -38,8 +35,7 @@ class TexGrid:
     def insert(self,entry_id:int,key:str,text:str):
         tokens=set(_tokenize(key))|set(_tokenize(text))
         eid=entry_id+1
-        for tok in tokens:
-            x,y=_hash_xy(tok,self.grid_w,self.grid_h)
+        for x,y in {_hash_xy(tok,self.grid_w,self.grid_h) for tok in tokens}:
             if self._np is not None:
                 slot=int(self._next_slot[y,x])
                 if slot<self.inline_slots:
