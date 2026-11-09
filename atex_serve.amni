@@ -542,6 +542,10 @@ fn load_kb(dir const byte[:]) bool {
 		flush_index();
 		return true;
 	}
+	if find(raw[..], "\"entries\"") < 0 {
+		write_stderr("[atex] corrupt index.json\n");
+		return false;
+	}
 	LAST_MTIME = file_mtime(idx_path);
 	var r = json::reader(raw[..]);
 	PAGES.clear();
@@ -981,11 +985,12 @@ fn hook_stop(d json::Doc&, root int) {
 	if !read_file(tp, raw) { return; }
 	var prompt byte[>..] = [];
 	var reply byte[>..] = [];
+	var tools byte[>..] = [];
 	var files byte[>..][>..] = [];
 	var ld = json::Doc {};
 	for ln in split(raw[..], '\n') {
-		let isu = find(ln, "\"type\":\"user\"") >= 0;
-		let isa = find(ln, "\"type\":\"assistant\"") >= 0;
+		let isu = find(ln, "\"type\":\"user\"") >= 0 || find(ln, "\"type\": \"user\"") >= 0;
+		let isa = find(ln, "\"type\":\"assistant\"") >= 0 || find(ln, "\"type\": \"assistant\"") >= 0;
 		if !isu && !isa { continue; }
 		let r, _ = json::parse(ln, ld);
 		if r < 0 { continue; }
@@ -1002,7 +1007,14 @@ fn hook_stop(d json::Doc&, root int) {
 				for i in 0..json::count(ld, ct) {
 					let it = json::element(ld, ct, i);
 					let bt, _ = json::as_string(ld, json::member(ld, it, "type"));
-					if bt == "tool_result" { tool_res = true; }
+					if bt == "tool_result" {
+						tool_res = true;
+						let c1, okc = json::as_string(ld, json::member(ld, it, "content"));
+						if okc && c1.len > 0 {
+							if tools.len > 0 { tools.push('\n'); }
+							tools.append(c1);
+						}
+					}
 					else if bt == "text" { let tx, _ = json::as_string(ld, json::member(ld, it, "text")); if txt.len > 0 { txt.push('\n'); } txt.append(tx); }
 				}
 			}
@@ -1011,6 +1023,7 @@ fn hook_stop(d json::Doc&, root int) {
 				prompt.clear();
 				prompt.append(tt);
 				reply.clear();
+				tools.clear();
 			}
 		} else {
 			for i in 0..json::count(ld, ct) {
@@ -1051,6 +1064,11 @@ fn hook_stop(d json::Doc&, root int) {
 	rec.append("Assistant: ");
 	rec.append(trim(reply[..]));
 	rec.push('\n');
+	if tools.len > 0 {
+		rec.append("Tool:\n");
+		rec.append(tools[..]);
+		rec.push('\n');
+	}
 	if files.len > 0 {
 		rec.append("Files:");
 		for f in files { rec.push(' '); rec.append(f[..]); }
@@ -1093,11 +1111,257 @@ fn hook_start(d json::Doc&, root int) {
 	write_stdout(out[..]);
 	flush_stdout();
 }
+fn json_deny(agent const byte[:], user const byte[:]) {
+	var out byte[>..] = [];
+	out.append("{\"permission\":\"deny\",\"agent_message\":");
+	json::format_string(out, agent);
+	out.append(",\"user_message\":");
+	json::format_string(out, user);
+	out.append("}\n");
+	write_stdout(out[..]);
+	flush_stdout();
+}
+fn json_allow() {
+	write_stdout("{\"permission\":\"allow\"}\n");
+	flush_stdout();
+}
+fn line_keep(ln const byte[:]) bool {
+	if find(ln, "CONSTRAINT") >= 0 || find(ln, "Decision") >= 0 || find(ln, "ERROR") >= 0 || find(ln, "def ") >= 0 || find(ln, "return False") >= 0 { return true; }
+	if find(ln, "/") >= 0 && ln.len > 8 { return true; }
+	var run = 0;
+	var i = 0;
+	while i < ln.len {
+		let c = ln[i];
+		if c >= 'A' && c <= 'Z' { run += 1; }
+		else if c == '_' || (c >= '0' && c <= '9') { }
+		else {
+			if run >= 6 { return true; }
+			run = 0;
+		}
+		i += 1;
+	}
+	run >= 6
+}
+fn excerpt_keep(raw const byte[:], out byte[>..]&) {
+	var n = 0;
+	var start = out.len;
+	for ln in split(raw, '\n') {
+		if line_keep(ln) {
+			if out.len > start { out.push('\n'); }
+			if ln.len > 240 { out.append(ln[..240]); } else { out.append(ln); }
+			n += 1;
+			if out.len - start > 700 || n >= 12 { break; }
+		}
+	}
+	if out.len == start {
+		let n2 = if raw.len > 400 { 400 } else { raw.len };
+		out.append(raw[..n2]);
+	}
+}
+fn tool_path_of(d json::Doc&, root int) byte[>..] {
+	var out byte[>..] = [];
+	let tin = json::member(d, root, "tool_input");
+	let p1, ok1 = json::as_string(d, json::member(d, tin, "path"));
+	if ok1 && p1.len > 0 { out.append(p1); return out; }
+	let p2, ok2 = json::as_string(d, json::member(d, tin, "file_path"));
+	if ok2 && p2.len > 0 { out.append(p2); return out; }
+	let p3, ok3 = json::as_string(d, json::member(d, tin, "target_file"));
+	if ok3 && p3.len > 0 { out.append(p3); return out; }
+	let p4, ok4 = json::as_string(d, json::member(d, root, "file_path"));
+	if ok4 { out.append(p4); }
+	out
+}
+fn shell_target(cmd const byte[:]) byte[>..] {
+	var out byte[>..] = [];
+	var rest const byte[:] = cmd;
+	if starts_with(cmd, "cat ") { rest = trim(cmd[4..]); }
+	else if starts_with(cmd, "type ") { rest = trim(cmd[5..]); }
+	else { return out; }
+	if rest.len >= 2 && rest[0] == '"' && rest[rest.len - 1] == '"' { rest = rest[1..rest.len - 1]; }
+	let sp = find(rest, " ");
+	if sp >= 0 { rest = rest[..sp]; }
+	out.append(rest);
+	out
+}
+fn conv_key(d json::Doc&, root int) byte[>..] {
+	var out byte[>..] = [];
+	let a, oka = json::as_string(d, json::member(d, root, "conversation_id"));
+	let b, okb = json::as_string(d, json::member(d, root, "session_id"));
+	let src const byte[:] = if oka && a.len > 0 { a } else if okb && b.len > 0 { b } else { "default" };
+	var i = 0;
+	while i < src.len && out.len < 64 {
+		let c = src[i];
+		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_' { out.push(c); }
+		i += 1;
+	}
+	if out.len == 0 { out.append("default"); }
+	out
+}
+fn seen_path(conv const byte[:], path const byte[:]) byte[>..] {
+	str(ADIR, "/cursor-seen-", conv)
+}
+fn already_seen(conv const byte[:], path const byte[:]) bool {
+	var raw byte[>..] = [];
+	let p = seen_path(conv, path);
+	if !read_file(p[..], raw) { return false; }
+	let needle = str("\n", path, "\n");
+	find(str("\n", raw, "\n")[..], needle[..]) >= 0
+}
+fn mark_seen(conv const byte[:], path const byte[:]) {
+	if path.len == 0 || already_seen(conv, path) { return; }
+	let p = seen_path(conv, path);
+	var prev byte[>..] = [];
+	read_file(p[..], prev);
+	if prev.len == 0 || prev[prev.len - 1] != '\n' { prev.push('\n'); }
+	prev.append(path);
+	prev.push('\n');
+	write_file(p[..], prev[..]);
+}
+fn load_bytes(path const byte[:], inline const byte[:], out byte[>..]&) bool {
+	if inline.len > 0 { out.append(inline); return true; }
+	if path.len == 0 { return false; }
+	read_file(path, out)
+}
+fn shrink_msg(path const byte[:], raw const byte[:], dup bool) byte[>..] {
+	var out byte[>..] = [];
+	if dup {
+		out.append("ATEX duplicate. Already sent this session. Do not read ");
+		out.append(path);
+		out.append(" again.\n");
+	} else {
+		out.append("ATEX kept ");
+		format(out, raw.len);
+		out.append(" chars off the prompt for ");
+		out.append(path);
+		out.append(".\n");
+	}
+	excerpt_keep(raw, out);
+	out
+}
+fn consider_path(d json::Doc&, root int, path const byte[:], inline const byte[:], inform_agent bool) bool {
+	if path.len == 0 { return false; }
+	let conv = conv_key(d, root);
+	var raw byte[>..] = [];
+	if !load_bytes(path, inline, raw) { return false; }
+	let dup = already_seen(conv[..], path);
+	if !dup && raw.len <= 1500 {
+		mark_seen(conv[..], path);
+		return false;
+	}
+	let msg = shrink_msg(path, raw[..], dup);
+	if !dup { mark_seen(conv[..], path); }
+	if inform_agent { json_deny(msg[..], msg[..]); }
+	else {
+		var out byte[>..] = [];
+		out.append("{\"permission\":\"deny\",\"user_message\":");
+		json::format_string(out, msg[..]);
+		out.append("}\n");
+		write_stdout(out[..]);
+		flush_stdout();
+	}
+	true
+}
+fn run_cursor(d json::Doc&, root int) {
+	let ev, okev = json::as_string(d, json::member(d, root, "hook_event_name"));
+	let event const byte[:] = if okev { ev } else { "" };
+	if event == "beforeSubmitPrompt" || event == "UserPromptSubmit" {
+		write_stdout("{\"continue\":true}\n");
+		flush_stdout();
+		return;
+	}
+	if event == "preCompact" || event == "PreCompact" {
+		let tp, okt = json::as_string(d, json::member(d, root, "transcript_path"));
+		if okt && tp.len > 0 { hook_stop(d, root); }
+		write_stdout("{}\n");
+		flush_stdout();
+		return;
+	}
+	if event == "sessionStart" || event == "SessionStart" || event == "start" {
+		let cwd, _ = json::as_string(d, json::member(d, root, "cwd"));
+		let slug = proj_slug(if cwd.len > 0 { cwd } else { "." });
+		let k = str("conv::", slug, "::latest_state");
+		var card byte[>..] = [];
+		if contains(KMAP, k[..]) { card.append(entry_text(get(KMAP, k[..], 0))); }
+		var out byte[>..] = [];
+		out.append("{\"additional_context\":");
+		json::format_string(out, card[..]);
+		out.append(",\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":");
+		json::format_string(out, card[..]);
+		out.append("}}\n");
+		write_stdout(out[..]);
+		flush_stdout();
+		return;
+	}
+	if event == "stop" || event == "Stop" {
+		hook_stop(d, root);
+		write_stdout("{}\n");
+		flush_stdout();
+		return;
+	}
+	if event == "beforeReadFile" {
+		let path = tool_path_of(d, root);
+		let content, _ = json::as_string(d, json::member(d, root, "content"));
+		if consider_path(d, root, path[..], content, false) { return; }
+		json_allow();
+		return;
+	}
+	if event == "preToolUse" {
+		let tn, _ = json::as_string(d, json::member(d, root, "tool_name"));
+		if tn == "Read" || tn == "read_file" || tn == "ReadFile" {
+			let path = tool_path_of(d, root);
+			if consider_path(d, root, path[..], "", true) { return; }
+			json_allow();
+			return;
+		}
+		if tn == "Shell" || tn == "shell" {
+			let tin = json::member(d, root, "tool_input");
+			let cmd, okc = json::as_string(d, json::member(d, tin, "command"));
+			if okc {
+				let target = shell_target(cmd);
+				if target.len > 0 && consider_path(d, root, target[..], "", true) { return; }
+			}
+			json_allow();
+			return;
+		}
+		json_allow();
+		return;
+	}
+	if event == "postToolUse" {
+		let mcp, okm = json::as_string(d, json::member(d, root, "mcp_server_name"));
+		let tn, _ = json::as_string(d, json::member(d, root, "tool_name"));
+		let output, oko = json::as_string(d, json::member(d, root, "tool_output"));
+		let is_mcp = (okm && mcp.len > 0) || starts_with(tn, "MCP:");
+		if is_mcp && oko && output.len > 800 {
+			var msg byte[>..] = [];
+			msg.append("ATEX trimmed MCP output from ");
+			format(msg, output.len);
+			msg.append(" chars.\n");
+			excerpt_keep(output, msg);
+			var out byte[>..] = [];
+			out.append("{\"updated_mcp_tool_output\":{\"text\":");
+			json::format_string(out, msg[..]);
+			out.append("}}\n");
+			write_stdout(out[..]);
+			flush_stdout();
+			return;
+		}
+		write_stdout("{}\n");
+		flush_stdout();
+		return;
+	}
+	write_stdout("{}\n");
+	flush_stdout();
+}
 fn run_hook(kind const byte[:]) {
 	var inp byte[>..] = [];
 	read_stdin(inp);
 	var d = json::Doc {};
 	let root, _ = json::parse(trim(inp[..]), d);
+	if kind == "cursor" {
+		if root < 0 { write_stdout("{}\n"); flush_stdout(); return; }
+		run_cursor(d, root);
+		return;
+	}
 	if root < 0 { return; }
 	if kind == "stop" { hook_stop(d, root); }
 	else if kind == "start" { hook_start(d, root); }
@@ -1460,7 +1724,7 @@ fn main() {
 			var out byte[>..] = [];
 			out.append("{\"jsonrpc\":\"2.0\",");
 			write_id(out, d, id_node);
-			out.append(",\"result\":{\"tools\":[{\"name\":\"atex_search\",\"description\":\"Keyword search over the local atex knowledge base. Returns each matching key with a line range, the best-matching lines, and an also: list of every other matching line number. A footer enumerates all remaining matching keys; pass page=N for the next set. exact=true scans all stored text for a literal case-insensitive string and returns key:line rows. Try it before reading whole files.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\",\"description\":\"Search keywords\"},\"k\":{\"type\":\"integer\",\"default\":3},\"max_chars\":{\"type\":\"integer\",\"default\":600},\"page\":{\"type\":\"integer\",\"default\":1},\"exact\":{\"type\":\"boolean\",\"default\":false}},\"required\":[\"query\"]}},{\"name\":\"atex_recall\",\"description\":\"Exact-key lookup in the atex knowledge base. Returns the stored text, or the line range given by lines=\"a-b\" (as shown by atex_search). Truncated output names the exact remaining line range.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"key\":{\"type\":\"string\"},\"max_chars\":{\"type\":\"integer\",\"default\":2400},\"lines\":{\"type\":\"string\",\"description\":\"Line range a-b\"}},\"required\":[\"key\"]}},{\"name\":\"atex_remember\",\"description\":\"Persist a learned fact to the atex knowledge base under namespace manual::.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"key\":{\"type\":\"string\"},\"text\":{\"type\":\"string\"}},\"required\":[\"key\",\"text\"]}},{\"name\":\"atex_list_keys\",\"description\":\"List keys in the atex KB matching a prefix.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"prefix\":{\"type\":\"string\",\"default\":\"\"},\"max\":{\"type\":\"integer\",\"default\":50}},\"required\":[\"prefix\"]}},{\"name\":\"atex_stats\",\"description\":\"Get atex KB statistics and unbiased context tracker report path for the current conversation.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{}}}]}}\n");
+			out.append(",\"result\":{\"tools\":[{\"name\":\"atex_search\",\"description\":\"Keyword search over the local atex knowledge base. Returns each matching key with a line range, the best-matching lines, and an also: list of every other matching line number. A footer enumerates all remaining matching keys; pass page=N for the next set. exact=true scans all stored text for a literal case-insensitive string and returns key:line rows. Try it before reading whole files.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\",\"description\":\"Search keywords\"},\"k\":{\"type\":\"integer\",\"default\":3},\"max_chars\":{\"type\":\"integer\",\"default\":600},\"page\":{\"type\":\"integer\",\"default\":1},\"exact\":{\"type\":\"boolean\",\"default\":false}},\"required\":[\"query\"]}},{\"name\":\"atex_recall\",\"description\":\"Exact-key lookup in the atex knowledge base. Returns the stored text, or the line range given by lines=a-b (as shown by atex_search). Truncated output names the exact remaining line range.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"key\":{\"type\":\"string\"},\"max_chars\":{\"type\":\"integer\",\"default\":2400},\"lines\":{\"type\":\"string\",\"description\":\"Line range a-b\"}},\"required\":[\"key\"]}},{\"name\":\"atex_remember\",\"description\":\"Persist a learned fact to the atex knowledge base under namespace manual::.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"key\":{\"type\":\"string\"},\"text\":{\"type\":\"string\"}},\"required\":[\"key\",\"text\"]}},{\"name\":\"atex_list_keys\",\"description\":\"List keys in the atex KB matching a prefix.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"prefix\":{\"type\":\"string\",\"default\":\"\"},\"max\":{\"type\":\"integer\",\"default\":50}},\"required\":[\"prefix\"]}},{\"name\":\"atex_stats\",\"description\":\"Get atex KB statistics and unbiased context tracker report path for the current conversation.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{}}}]}}\n");
 			write_stdout(out[..]);
 			flush_stdout();
 		} else if m == "ping" {

@@ -7,7 +7,7 @@ description: Lossless local byte-page memory in native Gold/Helium. Always call 
 
 ## Mandatory Retrieval Order
 
-1. **At the start of a turn or when resuming context:** Call `atex_recall(key="conv::latest_state")` to inspect the stateless conversation LUT index (`conv::<id>::turn_<N>`) and active edited files before scanning the repository.
+1. **At the start of a turn or when resuming context:** Read the restored atex card if one was injected. Otherwise call `atex_recall` on `conv::<project>::latest_state`. Full turns, including tool output, are `conv::<project>::turn_<n>`. Recall a turn before reading a whole file.
 2. **Before running `grep`, `find`, or reading full files:** Call `atex_search(query="...")` or `atex_list_keys(prefix="...")` to locate exact documentation sections, architecture maps, build rules, and prior turn facts through the native Helium nonce texture LUT.
 3. **When the user teaches a persistent project fact:** Call `atex_remember(key="manual::<topic>", text="...")` so it is stored losslessly in `.atex` across sessions and AI tools.
 

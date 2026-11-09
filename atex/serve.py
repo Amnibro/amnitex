@@ -35,7 +35,7 @@ def _handle_tools_call(req,kb,retriever):
     args=p.get('arguments') or {}
     try:
         if name=='atex_search':
-            results=retriever.retrieve(args.get('query',''),k=int(args.get('k',5)),max_chars_per=2000)
+            results=retriever.retrieve(args.get('query',''),k=int(args.get('k',5)),max_chars_per=int(args.get('max_chars',600)))
             content=[{'type':'text','text':retriever.format_as_context(results) if results else '(no results)'}]
             return _ok(req.get('id'),{'content':content,'isError':False})
         if name=='atex_recall':
@@ -70,12 +70,17 @@ def _handle_tools_call(req,kb,retriever):
         return _err(req.get('id'),-32603,f'tool {name} failed: {type(e).__name__}: {e}',data={'traceback':traceback.format_exc()[:2000]})
 def run(argv=None)->int:
     ap=argparse.ArgumentParser(prog='atex serve',description='MCP server exposing atex KB as tools')
-    ap.add_argument('--atex-dir',required=True,help='path to .atex/ KB directory (created by atex init)')
+    ap.add_argument('--atex-dir',default=None,help='path to .atex/ KB directory (created by atex init)')
     ap.add_argument('--log-file',default=None,help='write protocol log to this file (stderr default)')
     args=ap.parse_args(argv)
-    atex=Path(args.atex_dir)
+    from atex.session import default_atex_dir
+    atex=Path(args.atex_dir or default_atex_dir())
     if not (atex/'index.json').exists():print(f'[atex serve] ERROR: no index.json at {atex}; run "atex init" first',file=sys.stderr);return 2
-    kb=KnowledgeBase(atex)
+    try:
+        kb=KnowledgeBase(atex)
+    except KnowledgeBaseError as exc:
+        print(f'[atex serve] ERROR: {exc}',file=sys.stderr)
+        return 2
     retriever=KBRetriever(str(atex))
     log=open(args.log_file,'a',encoding='utf-8') if args.log_file else sys.stderr
     print(f'[atex serve] ready; {len(kb)} entries; tools: {[t["name"] for t in _TOOLS]}',file=log,flush=True)

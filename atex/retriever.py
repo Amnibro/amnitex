@@ -12,6 +12,24 @@ _TOK_RE=re.compile(r"[a-zA-Z][a-zA-Z0-9_\-\.]*")
 _STOP={'the','a','an','and','or','of','to','in','for','is','are','what','how','do','i','my','this','that','with','on','at','by','as','it','be','can','use','using','from','some','any','have','has','will','would','should','could','make','get','set','put','show','give','tell','please','help'}
 def _tokenize(text:str)->List[str]:
     return [t.lower() for t in _TOK_RE.findall(text or '') if t.lower() not in _STOP and len(t)>=2]
+def _window(txt:str,tokens:List[str],max_chars:int)->str:
+    if max_chars<=0 or len(txt)<=max_chars:return txt
+    low=txt.lower()
+    at=-1
+    for tok in tokens:
+        i=low.find(tok)
+        if i>=0 and (at<0 or i<at):at=i
+    if at<0:return txt[:max_chars]+'...'
+    start=max(0,at-max_chars//2)
+    nl=txt.rfind('\n',0,start)
+    if nl>=0 and start-nl<120:start=nl+1
+    end=min(len(txt),start+max_chars)
+    nl2=txt.rfind('\n',start,end)
+    if nl2>start+40:end=nl2
+    body=txt[start:end].strip()
+    if start>0:body='...'+body
+    if end<len(txt):body=body+'...'
+    return body
 class KBRetriever:
     def __init__(self,kb_root:str):
         self.kb=KnowledgeBase(kb_root)
@@ -32,8 +50,7 @@ class KBRetriever:
         scored.sort(key=lambda x:(-x[0],x[1]))
         out=[]
         for score,key,txt in scored[:k]:
-            if len(txt)>max_chars_per:txt=txt[:max_chars_per]+'...'
-            out.append((key,txt,score))
+            out.append((key,_window(txt,q_tokens,max_chars_per),score))
         return out
     def format_as_context(self,results:List[Tuple[str,str,int]])->str:
         if not results:return ''

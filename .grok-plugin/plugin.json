@@ -9,6 +9,8 @@
   "homepage": "https://amni-scient.com/amnitex-lut.html",
   "repository": "https://github.com/Amnibro/amnitex",
   "license": "MIT",
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
   "category": "productivity",
   "keywords": ["amnitex", "atex", "amni-scient", "tex-grid"]
 }

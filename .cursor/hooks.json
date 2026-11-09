@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [{ "command": ".cursor/hooks/atex.sh" }],
+    "stop": [{ "command": ".cursor/hooks/atex.sh" }],
+    "beforeSubmitPrompt": [{ "command": ".cursor/hooks/atex.sh" }],
+    "preCompact": [{ "command": ".cursor/hooks/atex.sh" }],
+    "preToolUse": [{ "command": ".cursor/hooks/atex.sh" }],
+    "beforeReadFile": [{ "command": ".cursor/hooks/atex.sh" }],
+    "postToolUse": [{ "command": ".cursor/hooks/atex.sh" }]
+  }
+}
