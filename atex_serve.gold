@@ -8,13 +8,14 @@ import os;
 import json;
 import dictionary;
 struct Page { fname byte[..64], idx int, used int }
-struct Entry { key byte[>..], page int, off int, len int, src_bytes int }
+struct Entry { koff int, klen int, page int, off int, len int, src_bytes int }
 struct Hit { id int, score int, conf int }
 var ADIR byte[>..];
 var PAGES Page[>..];
 var PDATA byte[>..][>..];
 var ENTRIES Entry[>..];
-var KMAP dictionary<const byte[:], int>;
+var KIDX dictionary<uint, int>;
+var KARENA byte[>..];
 var GBUILT = false;
 var VOCAB dictionary<uint, int>;
 var VARENA byte[>..];
@@ -71,6 +72,21 @@ fn entry_text(id int) const byte[:] {
 	ensure_page_loaded(e.page);
 	let d .= PDATA[e.page];
 	if e.off >= 0 && e.off + e.len <= d.len { d[e.off..e.off + e.len] } else { "" }
+}
+fn ekey(id int) const byte[:] { KARENA[ENTRIES[id].koff..ENTRIES[id].koff + ENTRIES[id].klen] }
+fn kfind(k const byte[:]) int {
+	var h = hash(k);
+	while contains(KIDX, h) {
+		let n = get(KIDX, h, 0);
+		if ekey(n) == k { return n; }
+		h = (h >> 1) ^ 0x5bd1e9955bd1e995;
+	}
+	-1
+}
+fn kadd(id int) {
+	var h = hash(ekey(id));
+	while contains(KIDX, h) { h = (h >> 1) ^ 0x5bd1e9955bd1e995; }
+	insert(KIDX, h, id);
 }
 fn nonce_find(w const byte[:]) int {
 	var h = hash(w);
@@ -231,7 +247,7 @@ fn build_grid() {
 	reset_lut();
 	if !load_tex() {
 		reset_lut();
-		for i in 0..ENTRIES.len { grid_insert(i, ENTRIES[i].key[..], entry_text(i)); }
+		for i in 0..ENTRIES.len { grid_insert(i, ekey(i), entry_text(i)); }
 		finalize_lut();
 		save_tex();
 	}
@@ -372,9 +388,9 @@ fn rank(terms QTerm[>..]&) Hit[>..] {
 	var kl byte[>..] = [];
 	each(scores) { id, sc =>
 		var s = sc;
-		lower_into(ENTRIES[id].key[..], kl);
+		lower_into(ekey(id), kl);
 		for ti in 0..terms.len { if terms[ti].wt > 0 && has_word(kl[..], stem_y(terms[ti].w[..])) { s += terms[ti].wt; } }
-		if starts_with(ENTRIES[id].key[..], "manual::") { s += 2; }
+		if starts_with(ekey(id), "manual::") { s += 2; }
 		hits.push(Hit { id: id, score: s, conf: if sc * 3 >= total { 1 } else { 0 } });
 	};
 	sort(hits[..]) { a, b => a.conf > b.conf || (a.conf == b.conf && (a.score > b.score || (a.score == b.score && (ENTRIES[a.id].len < ENTRIES[b.id].len || (ENTRIES[a.id].len == ENTRIES[b.id].len && a.id < b.id))))) };
@@ -395,11 +411,11 @@ fn rank(terms QTerm[>..]&) Hit[>..] {
 	}
 	var out Hit[>..] = [];
 	for h in hits {
-		let hk = ENTRIES[h.id].key[..];
+		let hk = ekey(h.id);
 		var dup = false;
 		if out.len < 200 {
 			for o in out {
-				let ek = ENTRIES[o.id].key[..];
+				let ek = ekey(o.id);
 				if (hk.len > ek.len && starts_with(hk, ek) && hk[ek.len] == ':') || (ek.len > hk.len && starts_with(ek, hk) && ek[hk.len] == ':') { dup = true; }
 			}
 		}
@@ -509,7 +525,7 @@ fn flush_index() {
 	out.append("],\"entries\":{");
 	for i in 0..ENTRIES.len {
 		if i > 0 { out.push(','); }
-		json::format_key(out, ENTRIES[i].key[..]);
+		json::format_key(out, ekey(i));
 		out.append("{\"page_idx\":");
 		format(out, ENTRIES[i].page);
 		out.append(",\"offset\":");
@@ -542,7 +558,8 @@ fn load_kb(dir const byte[:]) bool {
 		PAGES.clear();
 		PDATA.clear();
 		ENTRIES.clear();
-		clear(KMAP);
+		clear(KIDX);
+		KARENA.clear();
 		PAGE_BYTES = PAGE_W * PAGE_H * 4;
 		GBUILT = false;
 		flush_index();
@@ -557,7 +574,8 @@ fn load_kb(dir const byte[:]) bool {
 	PAGES.clear();
 	PDATA.clear();
 	ENTRIES.clear();
-	clear(KMAP);
+	clear(KIDX);
+	KARENA.clear();
 	var scratch byte[>..] = [];
 	json::each_member(r) { top_k =>
 		if top_k == "page_w" { PAGE_W = json::read_number(r) as int; }
@@ -576,7 +594,7 @@ fn load_kb(dir const byte[:]) bool {
 				PAGES.push(Page { fname: fnm, idx: idx, used: ub });
 			};
 		} else if top_k == "entries" {
-			reserve(KMAP, 1024);
+			reserve(KIDX, 1024);
 			json::each_member(r) { ek =>
 				var ky byte[>..] = [];
 				ky.append(ek);
@@ -599,8 +617,10 @@ fn load_kb(dir const byte[:]) bool {
 				};
 				if sb == 0 { sb = if ln > 0 { ln } else { 2400 }; }
 				let id = ENTRIES.len;
-				ENTRIES.push(Entry { key: copy(ky), page: pi, off: of, len: ln, src_bytes: sb });
-				insert(KMAP, ENTRIES[id].key[..], id);
+				let ko = KARENA.len;
+				KARENA.append(ky[..]);
+				ENTRIES.push(Entry { koff: ko, klen: ky.len, page: pi, off: of, len: ln, src_bytes: sb });
+				kadd(id);
 			};
 		} else { json::skip_value(r); }
 	};
@@ -644,19 +664,19 @@ fn put_kb_entry_mem(full_key const byte[:], text const byte[:], src_b int, write
 	PAGES[p].used += text.len;
 	if write_pg { write_file(str(ADIR, "/pages/", PAGES[p].fname), PDATA[p][..]); }
 	let sb = if src_b > 0 { src_b } else { text.len };
-	if contains(KMAP, full_key) {
-		let id = get(KMAP, full_key, 0);
+	if (kfind(full_key) >= 0) {
+		let id = kfind(full_key);
 		ENTRIES[id].page = p;
 		ENTRIES[id].off = off;
 		ENTRIES[id].len = text.len;
 		ENTRIES[id].src_bytes = sb;
 		if GBUILT { grid_insert(id, full_key, text); }
 	} else {
-		var ky byte[>..] = [];
-		ky.append(full_key);
 		let id = ENTRIES.len;
-		ENTRIES.push(Entry { key: copy(ky), page: p, off: off, len: text.len, src_bytes: sb });
-		insert(KMAP, ENTRIES[id].key[..], id);
+		let ko = KARENA.len;
+		KARENA.append(full_key);
+		ENTRIES.push(Entry { koff: ko, klen: full_key.len, page: p, off: off, len: text.len, src_bytes: sb });
+		kadd(id);
 		if GBUILT { grid_insert(id, full_key, text); }
 	}
 }
@@ -924,7 +944,7 @@ fn run_selftest() int {
 	load_kb(tdir);
 	save_kb_entry("manual::probe_fact", "PORT_9471_UDP is the primary telemetry port for AmniTex Helium.");
 	let hits = grid_query("telemetry udp port", 3);
-	let ok = hits.len > 0 && ENTRIES[hits[0].id].key[..] == "manual::probe_fact" && find(entry_text(hits[0].id), "PORT_9471_UDP") >= 0;
+	let ok = hits.len > 0 && ekey(hits[0].id) == "manual::probe_fact" && find(entry_text(hits[0].id), "PORT_9471_UDP") >= 0;
 	delete_file(str(tdir, "/pages/page_000000.kb.page"));
 	delete_file(str(tdir, "/index.json"));
 	delete_dir(str(tdir, "/pages"));
@@ -1059,11 +1079,11 @@ fn hook_stop(d json::Doc&, root int) {
 	let base = str("conv::", ps, "::");
 	let ck = str(base, "count");
 	var c = 0;
-	if contains(KMAP, ck[..]) { let v, okv = parse_int(trim(entry_text(get(KMAP, ck[..], 0)))); if okv { c = v; } }
+	if (kfind(ck[..]) >= 0) { let v, okv = parse_int(trim(entry_text(kfind(ck[..])))); if okv { c = v; } }
 	let head = str("User: ", prompt, "\n");
 	if c > 0 {
 		let pk = str(base, "turn_", c);
-		if !(contains(KMAP, pk[..]) && starts_with(entry_text(get(KMAP, pk[..], 0)), head[..])) { c += 1; }
+		if !((kfind(pk[..]) >= 0) && starts_with(entry_text(kfind(pk[..])), head[..])) { c += 1; }
 	} else { c = 1; }
 	var rec byte[>..] = [];
 	rec.append(head[..]);
@@ -1095,11 +1115,11 @@ fn hook_stop(d json::Doc&, root int) {
 	}
 	for t in max(1, c - 2)..c + 1 {
 		let tk = str(base, "turn_", t);
-		if !contains(KMAP, tk[..]) { continue; }
+		if !(kfind(tk[..]) >= 0) { continue; }
 		stt.append("\n## Turn ");
 		format(stt, t);
 		stt.push('\n');
-		clip(stt, entry_text(get(KMAP, tk[..], 0)), if t == c { 2400 } else { 900 });
+		clip(stt, entry_text(kfind(tk[..])), if t == c { 2400 } else { 900 });
 		stt.push('\n');
 	}
 	save_kb_entry(str(base, "latest_state")[..], stt[..]);
@@ -1109,10 +1129,10 @@ fn hook_start(d json::Doc&, root int) {
 	let cwd, _ = json::as_string(d, json::member(d, root, "cwd"));
 	if src == "startup" { return; }
 	let k = str("conv::", proj_slug(cwd), "::latest_state");
-	if !contains(KMAP, k[..]) { return; }
+	if !(kfind(k[..]) >= 0) { return; }
 	var out byte[>..] = [];
 	out.append("{\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":");
-	json::format_string(out, entry_text(get(KMAP, k[..], 0)));
+	json::format_string(out, entry_text(kfind(k[..])));
 	out.append("}}\n");
 	write_stdout(out[..]);
 	flush_stdout();
@@ -1287,7 +1307,7 @@ fn run_cursor(d json::Doc&, root int) {
 		let slug = proj_slug(if cwd.len > 0 { cwd } else { "." });
 		let k = str("conv::", slug, "::latest_state");
 		var card byte[>..] = [];
-		if contains(KMAP, k[..]) { card.append(entry_text(get(KMAP, k[..], 0))); }
+		if kfind(k[..]) >= 0 { card.append(entry_text(kfind(k[..]))); }
 		var out byte[>..] = [];
 		out.append("{\"additional_context\":");
 		json::format_string(out, card[..]);
@@ -1399,10 +1419,10 @@ fn wire_claude_hooks(cfg_path const byte[:], bin_path const byte[:], kb_dir cons
 	if write_file_atomic(cfg_path, out[..]) { 2 } else { 0 }
 }
 fn is_section(id int) bool {
-	let k = ENTRIES[id].key[..];
+	let k = ekey(id);
 	let p = rfind(k, "::");
 	let f = find(k, "::");
-	p > f && f >= 0 && contains(KMAP, k[..p])
+	p > f && f >= 0 && (kfind(k[..p]) >= 0)
 }
 fn line_of(txt const byte[:], at int) int {
 	var n = 1;
@@ -1420,7 +1440,7 @@ fn search_text(q const byte[:], k int, mc int, page int) byte[>..] {
 	var dbg byte[>..] = [];
 	if env("ATEX_DEBUG", dbg) && dbg.len > 0 {
 		for t in terms { write_stderr(str("[term] ", t.w[..], " wt=", t.wt, "\n")[..]); }
-		for h in hits[..min(hits.len, 8)] { write_stderr(str("[hit] ", ENTRIES[h.id].key[..], " score=", h.score, " conf=", h.conf, "\n")[..]); }
+		for h in hits[..min(hits.len, 8)] { write_stderr(str("[hit] ", ekey(h.id), " score=", h.score, " conf=", h.conf, "\n")[..]); }
 	}
 	if hits.len == 0 { res.append("(no stored entry contains these terms; exact=true scans raw text)"); return res; }
 	let pg = max(1, page);
@@ -1448,7 +1468,7 @@ fn search_text(q const byte[:], k int, mc int, page int) byte[>..] {
 		for x in SN_ALSO { RES_AL.push(h.id); RES_AL.push(x); }
 		if res.len > 0 { res.push('\n'); }
 		res.append("--- ");
-		res.append(ENTRIES[h.id].key[..]);
+		res.append(ekey(h.id));
 		res.append(body[..]);
 		cnt += 1;
 	}
@@ -1458,7 +1478,7 @@ fn search_text(q const byte[:], k int, mc int, page int) byte[>..] {
 		res.append("[");
 		if dups.len > 0 {
 			res.append("same lines also in:");
-			for d in dups { res.push(' '); res.append(ENTRIES[d].key[..]); }
+			for d in dups { res.push(' '); res.append(ekey(d)); }
 			if rest > 0 { res.append("; "); }
 		}
 		if rest > 0 {
@@ -1467,7 +1487,7 @@ fn search_text(q const byte[:], k int, mc int, page int) byte[>..] {
 			res.append(if cnt == 0 && pg == 1 { " weak matches: " } else { " more: " });
 			var shown = 0;
 			var m = j;
-			while m < hits.len && shown < 8 { if shown > 0 { res.append(" · "); } res.append(ENTRIES[hits[m].id].key[..]); shown += 1; m += 1; }
+			while m < hits.len && shown < 8 { if shown > 0 { res.append(" · "); } res.append(ekey(hits[m].id)); shown += 1; m += 1; }
 			if rest > shown { res.append(" …"); }
 			res.append("; page=");
 			format(res, if cnt == 0 && pg == 1 { 2 } else { pg + 1 });
@@ -1502,7 +1522,7 @@ fn exact_text(q const byte[:], k int, mc int, page int) byte[>..] {
 				if pass == 0 { mp = cs; } else if cs < 0 { lower_into(txt[a..e], lb); mp = find(lb[..], lq[..]); }
 				if mp >= 0 {
 					if total >= skip && total < skip + rpp {
-						res.append(ENTRIES[id].key[..]);
+						res.append(ekey(id));
 						res.append(":L");
 						format(res, ln);
 						res.append(": ");
@@ -1772,10 +1792,10 @@ fn main() {
 				let mc = if okm { mv } else { 2400 };
 				if !valid_key(key) {
 					send_err(d, id_node, -32602, "tool atex_recall invalid input: invalid key");
-				} else if !contains(KMAP, key) {
+				} else if !(kfind(key) >= 0) {
 					send_ok_text(d, id_node, "(not found)", true);
 				} else {
-					let id = get(KMAP, key, 0);
+					let id = kfind(key);
 					let txt = entry_text(id);
 					if okl && lv.len > 0 {
 						var res byte[>..] = [];
@@ -1831,7 +1851,7 @@ fn main() {
 				var res byte[>..] = [];
 				var cnt = 0;
 				for i in 0..ENTRIES.len {
-					let k = ENTRIES[i].key[..];
+					let k = ekey(i);
 					if k.len >= pref.len && k[..pref.len] == pref {
 						if cnt > 0 { res.push('\n'); }
 						res.append(k);
