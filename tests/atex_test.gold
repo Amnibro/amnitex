@@ -7,6 +7,7 @@ import os;
 import json;
 var BIN byte[>..];
 var T byte[>..];
+var PRE byte[>..];
 var FAILS = 0;
 var RUNS = 0;
 fn check(name const byte[:], ok bool) {
@@ -40,7 +41,13 @@ fn put(p const byte[:], data const byte[:]) {
 	if cut > 0 { mkdirs(p[..cut]); }
 	write_file(p, data);
 }
-fn at_home(home const byte[:], rest const byte[:]) int { run_command(str("HOME=", quote(home), " ", quote(BIN[..]), " ", rest, " > ", quote(str(T, "/last")), " 2>&1")[..]) }
+fn at_home(home const byte[:], rest const byte[:]) int { run_command(str("HOME=", quote(home), " ", PRE, quote(BIN[..]), " ", rest, " > ", quote(str(T, "/last")), " 2>&1")[..]) }
+fn fake_claude(name const byte[:], ver const byte[:]) byte[>..] {
+	let f = str(T, "/", name, "/claude");
+	put(f[..], str("#!/bin/sh\necho \"", ver, " (Claude Code)\"\n")[..]);
+	make_exec(f[..]);
+	str("PATH=", quote(str(T, "/", name)[..]), ":$PATH ")
+}
 fn call_line(id int, name const byte[:], a const byte[:]) byte[>..] { str("{\"jsonrpc\":\"2.0\",\"id\":", id, ",\"method\":\"tools/call\",\"params\":{\"name\":\"", name, "\",\"arguments\":", a, "}}\n") }
 fn replies(raw const byte[:]) byte[>..][>..] {
 	var out byte[>..][>..] = [];
@@ -262,37 +269,68 @@ fn test_install() {
 	let hm = str(root, "/home");
 	let kb = str(root, "/kb");
 	let set = str(hm, "/.claude/settings.json");
-	put(set[..], "{\n  \"model\": \"opus\",\n  \"env\": {\"KEEP_ME\": \"1\", \"N\": 7},\n  \"hooks\": {\n    \"Stop\": [{\"hooks\": [{\"type\": \"command\", \"command\": \"other-tool done\"}, {\"type\": \"command\", \"command\": \"'/old/atex' hook stop --atex-dir '/old/kb'\"}]}],\n    \"SessionStart\": [{\"matcher\": \"clear|compact\", \"hooks\": [{\"type\": \"command\", \"command\": \"'/old/atex' hook start --atex-dir '/old/kb'\"}]}],\n    \"PreToolUse\": [{\"matcher\": \"Edit\", \"hooks\": [{\"type\": \"command\", \"command\": \"lint-it\"}]}]\n  },\n  \"permissions\": {\"allow\": [\"Bash(ls:*)\"]}\n}\n");
+	put(set[..], "{\n  \"model\": \"opus\",\n  \"env\": {\"KEEP_ME\": \"1\", \"N\": 7, \"CLAUDE_CODE_AUTO_COMPACT_WINDOW\": \"283000\"},\n  \"modelSettings\": {\"claude-opus-5-5\": {\"effortLevel\": \"xhigh\", \"autoCompactWindow\": 500000}, \"claude-haiku-5-5\": {\"effortLevel\": \"low\"}},\n  \"hooks\": {\n    \"Stop\": [{\"hooks\": [{\"type\": \"command\", \"command\": \"other-tool done\"}, {\"type\": \"command\", \"command\": \"'/old/atex' hook stop --atex-dir '/old/kb'\"}]}],\n    \"SessionStart\": [{\"matcher\": \"clear|compact\", \"hooks\": [{\"type\": \"command\", \"command\": \"'/old/atex' hook start --atex-dir '/old/kb'\"}]}],\n    \"PreToolUse\": [{\"matcher\": \"Edit\", \"hooks\": [{\"type\": \"command\", \"command\": \"lint-it\"}]}]\n  },\n  \"permissions\": {\"allow\": [\"Bash(ls:*)\"]}\n}\n");
 	put(str(hm, "/.claude.json")[..], "{\"mcpServers\":{\"other\":{\"command\":\"x\"}},\"numStartups\":7}\n");
 	mkdirs(str(hm, "/.cursor")[..]);
 	let ins = str("install --atex-dir ", quote(kb[..]));
 	at_home(hm[..], "doctor");
 	check("doctor asks for a new install while the start hook has its old matcher", has(slurp(str(T, "/last")[..])[..], "ok hook that restores state") && has(slurp(str(T, "/last")[..])[..], "missing that hook runs in every session"));
+	check("doctor names a window set by the environment variable", has(slurp(str(T, "/last")[..])[..], "ok compact window 283000 for every model"));
 	check("install succeeds", at_home(hm[..], ins[..]) == 0);
+	let out1 = slurp(str(T, "/last")[..]);
 	let s1 = slurp(set[..]);
 	var d = json::Doc {};
 	let r, _ = json::parse(s1[..], d);
 	check("settings stay valid JSON", r >= 0);
-	let w, _ = json::as_string(d, json::member(d, json::member(d, r, "env"), "CLAUDE_CODE_AUTO_COMPACT_WINDOW"));
-	check("the compact window is set", w == "283000");
+	let ms = json::member(d, r, "modelSettings");
+	let w, _ = json::as_i64(d, json::member(d, r, "autoCompactWindow"));
+	let hw, _ = json::as_i64(d, json::member(d, json::member(d, ms, "claude-haiku-5-5"), "autoCompactWindow"));
+	let ow, _ = json::as_i64(d, json::member(d, json::member(d, ms, "claude-opus-5-5"), "autoCompactWindow"));
+	check("the compact window is set", w == 283000);
+	check("Claude Haiku 5.5 gets its own window", hw == 100000 && has(s1[..], "\"effortLevel\": \"low\""));
+	check("a model window you set yourself is kept", ow == 500000);
+	check("the window moves out of the environment variable", !has(s1[..], "CLAUDE_CODE_AUTO_COMPACT_WINDOW") && has(out1[..], "already open"));
+	check("install lists the windows", has(out1[..], "compact window 283000 (") && has(out1[..], "compact window 100000 for claude-haiku-5-5") && has(out1[..], "compact window 500000 for claude-opus-5-5"));
 	check("unrelated settings survive", has(s1[..], "KEEP_ME") && has(s1[..], "other-tool done") && has(s1[..], "lint-it") && has(s1[..], "Bash(ls:*)") && has(s1[..], "\"model\""));
 	check("old atex hooks are replaced", !has(s1[..], "/old/kb") && has(s1[..], " hook stop --atex-dir") && has(s1[..], " hook start --atex-dir") && has(s1[..], " hook tool --atex-dir"));
 	check("the start hook runs in every session", !has(s1[..], "clear|compact"));
+	PRE.append("CLAUDE_CODE_AUTO_COMPACT_WINDOW=283000 ");
 	check("doctor passes", at_home(hm[..], "doctor") == 0);
-	check("doctor reports one knowledge base", has(slurp(str(T, "/last")[..])[..], "ok one knowledge base"));
+	PRE = fake_claude("newbin", "2.1.322");
+	let doc = slurp(str(T, "/last")[..]);
+	check("doctor reports one knowledge base", has(doc[..], "ok one knowledge base"));
+	check("doctor lists the windows", has(doc[..], "ok compact window 283000 (") && has(doc[..], "ok compact window 100000 for claude-haiku-5-5") && has(doc[..], "ok compact window 500000 for claude-opus-5-5"));
+	check("doctor notes a window set in the shell", has(doc[..], "note this shell has CLAUDE_CODE_AUTO_COMPACT_WINDOW=283000"));
 	at_home(hm[..], ins[..]);
-	check("install twice changes nothing", slurp(set[..]) == s1);
+	check("install twice changes nothing", slurp(set[..]) == s1 && !has(slurp(str(T, "/last")[..])[..], "already open"));
 	at_home(hm[..], str(ins, " --no-compact-window")[..]);
-	check("the compact window can be turned off", !has(slurp(set[..])[..], "CLAUDE_CODE_AUTO_COMPACT_WINDOW"));
-	let own = str(root, "/own.json");
-	put(own[..], "{\"env\":{\"CLAUDE_CODE_AUTO_COMPACT_WINDOW\":\"400000\"}}");
-	run_command(str("cp ", quote(own[..]), " ", quote(set[..]))[..]);
+	let s3 = slurp(set[..]);
+	check("the compact windows can be turned off", !has(s3[..], "283000") && !has(s3[..], "100000") && has(s3[..], "500000") && has(s3[..], "\"effortLevel\": \"low\"") && has(s3[..], "KEEP_ME"));
+	put(set[..], "{\"env\":{\"CLAUDE_CODE_AUTO_COMPACT_WINDOW\":\"400000\"}}");
 	at_home(hm[..], ins[..]);
-	check("a window you set yourself is kept", has(slurp(set[..])[..], "400000") && !has(slurp(set[..])[..], "283000"));
+	check("a window you set yourself is kept", has(slurp(set[..])[..], "400000") && !has(slurp(set[..])[..], "283000") && !has(slurp(set[..])[..], "100000"));
+	put(set[..], "{\"autoCompactWindow\":\"auto\"}");
+	at_home(hm[..], ins[..]);
+	check("your own window for every model is kept", has(slurp(set[..])[..], "\"autoCompactWindow\": \"auto\"") && !has(slurp(set[..])[..], "283000") && has(slurp(set[..])[..], "\"autoCompactWindow\": 100000"));
+	put(set[..], "{\"modelSettings\":{\"haiku\":{\"autoCompactWindow\":150000}}}");
+	at_home(hm[..], ins[..]);
+	check("a Claude Haiku window set under another name is kept", !has(slurp(set[..])[..], "claude-haiku-5-5") && has(slurp(set[..])[..], "150000") && has(slurp(set[..])[..], "\"autoCompactWindow\": 283000"));
+	put(set[..], "{}");
+	PRE = fake_claude("oldbin", "2.1.200");
+	at_home(hm[..], ins[..]);
+	PRE = fake_claude("newbin", "2.1.322");
+	let s4 = slurp(set[..]);
+	check("an older Claude Code gets one window for every model", has(s4[..], "\"CLAUDE_CODE_AUTO_COMPACT_WINDOW\": \"283000\"") && !has(s4[..], "autoCompactWindow") && has(slurp(str(T, "/last")[..])[..], "older than 2.1.288"));
+	at_home(hm[..], ins[..]);
+	check("a newer Claude Code moves that window into settings", !has(slurp(set[..])[..], "CLAUDE_CODE_AUTO_COMPACT_WINDOW") && has(slurp(set[..])[..], "\"autoCompactWindow\": 283000") && has(slurp(set[..])[..], "\"autoCompactWindow\": 100000"));
+	put(set[..], "{\"modelSettings\":{\"claude-haiku-5-5\":{\"autoCompactWindow\":150000}}}");
+	at_home(hm[..], ins[..]);
+	check("a Claude Haiku 5.5 window you set yourself is kept", has(slurp(set[..])[..], "150000") && has(slurp(set[..])[..], "\"autoCompactWindow\": 283000") && !has(slurp(set[..])[..], "100000"));
 	at_home(hm[..], "uninstall");
 	let s2 = slurp(set[..]);
 	check("uninstall removes the hooks", !has(s2[..], " hook stop") && !has(s2[..], " hook tool"));
-	check("uninstall keeps a window you set yourself", has(s2[..], "400000"));
+	check("uninstall removes the window atex set", !has(s2[..], "283000"));
+	check("uninstall keeps a window you set yourself", has(s2[..], "150000"));
 	check("uninstall removes the MCP server only", !has(slurp(str(hm, "/.claude.json")[..])[..], "amnitex") && has(slurp(str(hm, "/.claude.json")[..])[..], "other"));
 	check("uninstall removes Cursor files", !file_exists(str(hm, "/.cursor/hooks/atex-cursor")) && !file_exists(str(hm, "/.cursor/rules/amnitex.mdc")));
 	check("doctor fails after uninstall", at_home(hm[..], "doctor") != 0);
@@ -571,6 +609,7 @@ fn main() {
 	BIN.append(av[1]);
 	T.append(str("/tmp/atex-test-", time_ns()));
 	mkdirs(T[..]);
+	PRE = fake_claude("newbin", "2.1.322");
 	test_tiers();
 	test_fresh();
 	test_shared();

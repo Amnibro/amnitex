@@ -1097,6 +1097,8 @@ fn json_str(s const byte[:]) byte[>..] {
 var NO_WINDOW = false;
 fn window_key() const byte[:] { "CLAUDE_CODE_AUTO_COMPACT_WINDOW" }
 fn window_val() const byte[:] { "283000" }
+fn haiku_key() const byte[:] { "claude-haiku-5-5" }
+fn haiku_val() const byte[:] { "100000" }
 fn cursor_events() byte[>..][>..] {
 	var e byte[>..][>..] = [];
 	for n in ["sessionStart", "stop", "beforeSubmitPrompt", "preCompact", "preToolUse", "beforeReadFile", "postToolUse"] { e.push(str(n)); }
@@ -1236,30 +1238,73 @@ fn hooks_merged(d json::Doc&, hn int, rows const byte[>..][:]) byte[>..] {
 	o.push('}');
 	o
 }
-fn env_merged(d json::Doc&, en int, add_window bool) byte[>..] {
+fn unq(v const byte[:]) const byte[:] { if v.len > 1 && v[0] == '"' { v[1..v.len - 1] } else { v } }
+fn node_text(d json::Doc&, n int) byte[>..] {
+	var v byte[>..] = [];
+	if n >= 0 { je_emit(d, n, v, -1); }
+	str(unq(v[..]))
+}
+fn js_add(o byte[>..]&, part const byte[:]) {
+	if o.len > 1 { o.push(','); }
+	o.append(part);
+}
+fn obj_set(d json::Doc&, n int, key const byte[:], sub const byte[:], val const byte[:], add bool) byte[>..] {
 	var o = str("{");
-	var any = false;
 	var has = false;
-	var c = if en >= 0 { d.nodes[en].first } else { -1 };
+	var c = if json::kind(d, n) == json::K_OBJ { d.nodes[n].first } else { -1 };
 	while c >= 0 {
-		let v, _ = json::as_string(d, c);
-		let mine = json::name_of(d, c) == window_key();
+		let mine = json::name_of(d, c) == key;
+		var v byte[>..] = [];
+		if mine && sub.len > 0 && json::kind(d, c) == json::K_OBJ { v = obj_set(d, c, sub, "", val, add); } else { je_emit(d, c, v, -1); }
 		has = has || mine;
-		if !(mine && !add_window && v == window_val()) {
-			if any { o.push(','); }
-			any = true;
-			o.append(json_str(json::name_of(d, c))[..]);
-			o.push(':');
-			je_emit(d, c, o, -1);
-		}
+		let same = if sub.len > 0 { v == "{}" } else { unq(v[..]) == unq(val) };
+		if !(mine && !add && same) { js_add(o, str(json_str(json::name_of(d, c)), ":", v)[..]); }
 		c = d.nodes[c].next;
 	}
-	if add_window && !has {
-		if any { o.push(','); }
-		o.append(str(json_str(window_key()), ":", json_str(window_val()))[..]);
-	}
+	if add && !has { js_add(o, str(json_str(key), ":", if sub.len > 0 { str("{", json_str(sub), ":", val, "}") } else { str(val) })[..]); }
 	o.push('}');
 	o
+}
+fn haiku_own(d json::Doc&, ms int) bool {
+	var c = if json::kind(d, ms) == json::K_OBJ { d.nodes[ms].first } else { -1 };
+	while c >= 0 {
+		if json::name_of(d, c) != haiku_key() && find(json::name_of(d, c), "haiku") >= 0 && json::member(d, c, "autoCompactWindow") >= 0 { return true; }
+		c = d.nodes[c].next;
+	}
+	false
+}
+fn windows_text(d json::Doc&, root int, pre const byte[:]) byte[>..] {
+	let e = node_text(d, json::member(d, json::member(d, root, "env"), window_key()));
+	if e.len > 0 { return str(pre, "compact window ", e, " for every model, set by ", window_key(), ", which overrides the windows in settings\n"); }
+	var o byte[>..] = [];
+	let w = node_text(d, json::member(d, root, "autoCompactWindow"));
+	if w.len > 0 { o.append(str(pre, "compact window ", w, " (Claude Code compacts about 33K tokens before a window)\n")[..]); }
+	let ms = json::member(d, root, "modelSettings");
+	var c = if json::kind(d, ms) == json::K_OBJ { d.nodes[ms].first } else { -1 };
+	while c >= 0 {
+		let m = node_text(d, json::member(d, c, "autoCompactWindow"));
+		if m.len > 0 { o.append(str(pre, "compact window ", m, " for ", json::name_of(d, c), if json::name_of(d, c) == haiku_key() { " (a request above 100K tokens costs 5 times as much on this model)" } else { "" }, "\n")[..]); }
+		c = d.nodes[c].next;
+	}
+	o
+}
+fn claude_old(kb const byte[:]) bool {
+	let f = str(kb, "/claude-version.tmp~");
+	run_command(str("claude --version > ", sh_q(f[..]), " 2> /dev/null < /dev/null")[..]);
+	var v byte[>..] = [];
+	read_file(f[..], v);
+	delete_file(f[..]);
+	var n = 0;
+	var part = 0;
+	var k = 0;
+	for c in v {
+		if c >= '0' && c <= '9' { part = part * 10 + (c - '0') as int; } else if c == '.' && k < 2 {
+			n = n * 1000 + part;
+			part = 0;
+			k += 1;
+		} else { break; }
+	}
+	k == 2 && n * 1000 + part < 2001288
 }
 fn save_json(path const byte[:], exists bool, raw const byte[:], d json::Doc&, root int, compact const byte[:]) int {
 	var nd = json::Doc {};
@@ -1275,17 +1320,21 @@ fn save_json(path const byte[:], exists bool, raw const byte[:], d json::Doc&, r
 	if exists && !file_exists(str(path, ".atex-backup")) { write_file(str(path, ".atex-backup"), raw); }
 	if write_file_atomic(path, neu[..]) { 1 } else { -1 }
 }
-fn hooks_update(path const byte[:], rows const byte[>..][:], add_window bool, seed const byte[:]) int {
+fn hooks_update(path const byte[:], rows const byte[>..][:], win0 int, seed const byte[:]) int {
 	var raw byte[>..] = [];
 	let exists = read_file(path, raw);
 	var d = json::Doc {};
 	let t = trim(raw[..]);
 	let root, _ = json::parse(if t.len > 0 { t } else { seed }, d);
 	if root < 0 || json::kind(d, root) != json::K_OBJ { return -1; }
+	let own = node_text(d, json::member(d, json::member(d, root, "env"), window_key()));
+	let win = if win0 == 2 && own.len > 0 && own[..] != window_val() { 1 } else { win0 };
+	let hk = win == 2 && !haiku_own(d, json::member(d, root, "modelSettings"));
 	var o = str("{");
-	var any = false;
 	var saw_h = false;
 	var saw_e = false;
+	var saw_w = false;
+	var saw_m = false;
 	var c = d.nodes[root].first;
 	while c >= 0 {
 		let nm = json::name_of(d, c);
@@ -1295,28 +1344,22 @@ fn hooks_update(path const byte[:], rows const byte[>..][:], add_window bool, se
 			val = hooks_merged(d, c, rows);
 		} else if nm == "env" {
 			saw_e = true;
-			val = env_merged(d, c, add_window);
-		} else { je_emit(d, c, val, -1); }
-		if !((nm == "hooks" || nm == "env") && val == "{}") {
-			if any { o.push(','); }
-			any = true;
-			o.append(json_str(nm)[..]);
-			o.push(':');
-			o.append(val[..]);
+			val = obj_set(d, c, window_key(), "", json_str(window_val())[..], win == 1);
+		} else if nm == "modelSettings" && win != 1 {
+			saw_m = true;
+			val = obj_set(d, c, haiku_key(), "autoCompactWindow", haiku_val(), hk);
+		} else {
+			saw_w = saw_w || nm == "autoCompactWindow";
+			saw_m = saw_m || nm == "modelSettings";
+			je_emit(d, c, val, -1);
 		}
+		if !(((nm == "hooks" || nm == "env" || nm == "modelSettings") && val == "{}") || (nm == "autoCompactWindow" && win == 0 && unq(val[..]) == window_val())) { js_add(o, str(json_str(nm), ":", val)[..]); }
 		c = d.nodes[c].next;
 	}
-	if !saw_h && rows.len > 0 {
-		if any { o.push(','); }
-		any = true;
-		o.append("\"hooks\":");
-		o.append(hooks_merged(d, -1, rows)[..]);
-	}
-	if !saw_e && add_window {
-		if any { o.push(','); }
-		o.append("\"env\":");
-		o.append(env_merged(d, -1, true)[..]);
-	}
+	if !saw_h && rows.len > 0 { js_add(o, str("\"hooks\":", hooks_merged(d, -1, rows))[..]); }
+	if !saw_e && win == 1 { js_add(o, str("\"env\":", obj_set(d, -1, window_key(), "", json_str(window_val())[..], true))[..]); }
+	if !saw_w && win == 2 { js_add(o, str("\"autoCompactWindow\":", window_val())[..]); }
+	if !saw_m && hk { js_add(o, str("\"modelSettings\":", obj_set(d, -1, haiku_key(), "autoCompactWindow", haiku_val(), true))[..]); }
 	o.push('}');
 	save_json(path, exists, raw[..], d, root, o[..])
 }
@@ -1352,7 +1395,7 @@ fn wire_cursor(hm const byte[:], bin_path const byte[:], kb_dir const byte[:]) {
 		rows.push(copy(ev));
 		rows.push(str("{\"command\":", json_str(script[..]), "}"));
 	}
-	let r = hooks_update(str(hm, "/.cursor/hooks.json")[..], rows[..], false, "{\"version\":1}");
+	let r = hooks_update(str(hm, "/.cursor/hooks.json")[..], rows[..], 0, "{\"version\":1}");
 	write_stdout(if r < 0 { "  ! ~/.cursor/hooks.json is not valid JSON; left unchanged\n" } else { "  + Cursor hooks (~/.cursor/hooks.json)\n" });
 	write_file(str(hm, "/.cursor/rules/amnitex.mdc"), cursor_rule());
 }
@@ -1409,8 +1452,8 @@ fn run_uninstall() {
 	var hm byte[>..] = [];
 	if !env("HOME", hm) || hm.len == 0 { write_stderr("[atex uninstall] HOME is not set\n"); exit(1); }
 	var none byte[>..][>..] = [];
-	if file_exists(str(hm, "/.claude/settings.json")) && hooks_update(str(hm, "/.claude/settings.json")[..], none[..], false, "{}") > 0 { write_stdout("  - Claude Code hooks and compact setting\n"); }
-	if file_exists(str(hm, "/.cursor/hooks.json")) && hooks_update(str(hm, "/.cursor/hooks.json")[..], none[..], false, "{}") > 0 { write_stdout("  - Cursor hooks\n"); }
+	if file_exists(str(hm, "/.claude/settings.json")) && hooks_update(str(hm, "/.claude/settings.json")[..], none[..], 0, "{}") > 0 { write_stdout("  - Claude Code hooks and the compact windows atex set\n"); }
+	if file_exists(str(hm, "/.cursor/hooks.json")) && hooks_update(str(hm, "/.cursor/hooks.json")[..], none[..], 0, "{}") > 0 { write_stdout("  - Cursor hooks\n"); }
 	for f in ["/.cursor/hooks/atex-cursor", "/.cursor/rules/amnitex.mdc"] { if delete_file(str(hm, f)) { write_stdout(str("  - ~", f, "\n")[..]); } }
 	for f in ["/.claude.json", "/.cursor/mcp.json", "/.codeium/windsurf/mcp_config.json", "/.gemini/settings.json", "/.config/Claude/claude_desktop_config.json", "/Library/Application Support/Claude/claude_desktop_config.json"] { if mcp_drop(str(hm, f)[..]) { write_stdout(str("  - MCP server from ~", f, "\n")[..]); } }
 	for f in ["/.codex/config.toml", "/.grok/config.toml"] { if toml_drop(str(hm, f)[..]) { write_stdout(str("  - MCP server from ~", f, "\n")[..]); } }
@@ -1449,7 +1492,7 @@ fn run_doctor() {
 	var hm byte[>..] = [];
 	env("HOME", hm);
 	var fails = 0;
-	write_stdout("atex 0.4.6 (gold/helium-native)\n");
+	write_stdout("atex 0.4.7 (gold/helium-native)\n");
 	if is_dir(str(hm, "/.claude")) {
 		var raw byte[>..] = [];
 		read_file(str(hm, "/.claude/settings.json"), raw);
@@ -1460,8 +1503,10 @@ fn run_doctor() {
 		doctor_row(find(raw[..], " hook start") >= 0, "hook that restores state after /clear and compaction", fails);
 		doctor_row(start_all(d, root), "that hook runs in every session, so the assistant is asked to group tool calls", fails);
 		doctor_row(find(raw[..], " hook tool") >= 0, "hook that keeps long Bash output on disk", fails);
-		let w, okw = json::as_string(d, json::member(d, json::member(d, root, "env"), window_key()));
-		write_stdout(if okw { str("ok compact window ", w, " (compacts about 33K tokens earlier)\n") } else { str("off compaction setting; Claude Code uses its default\n") });
+		let wt = windows_text(d, root, "ok ");
+		write_stdout(if wt.len > 0 { wt } else { str("off compaction setting; Claude Code uses its default\n") });
+		var sv byte[>..] = [];
+		if env(window_key(), sv) && sv.len > 0 && json::member(d, json::member(d, root, "env"), window_key()) < 0 { write_stdout(str("note this shell has ", window_key(), "=", sv, "; Claude Code started from it uses that window for every model\n")[..]); }
 		var cj byte[>..] = [];
 		read_file(str(hm, "/.claude.json"), cj);
 		var dj = json::Doc {};
@@ -1686,9 +1731,20 @@ fn run_install(bin_arg const byte[:], kb_dir const byte[:]) {
 		}
 		if is_dir(str(hm, "/.claude")) {
 			let rows = claude_rows(bin_path[..], kb_dir);
-			let hr = hooks_update(str(hm, "/.claude/settings.json")[..], rows[..], !NO_WINDOW, "{}");
+			let sp = str(hm, "/.claude/settings.json");
+			var was byte[>..] = [];
+			read_file(sp[..], was);
+			let old = !NO_WINDOW && claude_old(kb_dir);
+			let hr = hooks_update(sp[..], rows[..], if NO_WINDOW { 0 } else if old { 1 } else { 2 }, "{}");
 			write_stdout(if hr < 0 { "  ! ~/.claude/settings.json is not valid JSON; left unchanged\n" } else { "  + Claude Code hooks (saves turns, restores state after /clear and compaction, keeps long Bash output on disk, asks the assistant to group tool calls)\n" });
-			if hr >= 0 && !NO_WINDOW { write_stdout(str("  + Claude Code compacts at about 250K tokens (", window_key(), "=", window_val(), ") unless you already set that. To turn this off: atex install --no-compact-window\n")[..]); }
+			if hr >= 0 && !NO_WINDOW {
+				var now byte[>..] = [];
+				read_file(sp[..], now);
+				var d = json::Doc {};
+				let root, _ = json::parse(trim(now[..]), d);
+				let moved = !old && find(was[..], window_key()) >= 0 && json::member(d, json::member(d, root, "env"), window_key()) < 0;
+				write_stdout(str("  + Claude Code compact windows. A window you set yourself is kept. To turn this off: atex install --no-compact-window\n", windows_text(d, root, "      "), if old { "      This Claude Code is older than 2.1.288, so one window covers every model. Update it and run atex install again to add the Claude Haiku 5.5 window.\n" } else if moved { "      The window moved out of CLAUDE_CODE_AUTO_COMPACT_WINDOW, which overrides the windows in settings. Claude Code sessions that are already open keep the old value until you restart them.\n" } else { "" })[..]);
+			}
 		}
 		if is_dir(str(hm, "/.cursor")) { wire_cursor(hm[..], bin_path[..], kb_dir); }
 		if is_dir(str(hm, "/.cursor")) && wire_json_mcp(str(hm, "/.cursor/mcp.json")[..], bin_path[..], kb_dir) {
@@ -2733,7 +2789,7 @@ fn run_bench(tsv const byte[:]) {
 		rows.append("}");
 	}
 	var out byte[>..] = [];
-	out.append("{\"engine\":\"atex 0.4.6\",\"k\":");
+	out.append("{\"engine\":\"atex 0.4.7\",\"k\":");
 	format(out, DEF_K);
 	out.append(",\"max_chars\":");
 	format(out, DEF_MC);
@@ -3369,11 +3425,11 @@ fn main() {
 	while i < av.len {
 		let a = av[i];
 		if a == "--version" || a == "-v" {
-			write_stdout("atex 0.4.6 (gold/helium-native)\n");
+			write_stdout("atex 0.4.7 (gold/helium-native)\n");
 			flush_stdout();
 			return;
 		} else if a == "--help" || a == "-h" || a == "help" {
-			write_stdout("atex 0.4.6 (gold/helium-native)\nUsage:\n  atex [serve] [--atex-dir <dir>]     Run MCP stdio server\n  atex init [project_dir] [--atex-dir <dir>]  Index project docs & code into KB\n  atex install [--atex-dir <dir>] [--no-compact-window]  Wire Claude Code, Cursor, Windsurf, Gemini, Codex, Grok\n  atex uninstall                      Remove the wiring; knowledge bases stay\n  atex doctor                         Check the wiring\n  atex replay [projects_dir]          Model what each setting would have saved on your own Claude Code sessions\n  atex run \"<task>\" [--cut <tokens>] [--parts <n>] [--check \"<command>\"] [--allow-all] [-- <claude flags>]  Run a task in Claude Code in small parts, cutting context between them; --check runs your test command after every edit\n  atex stats [--atex-dir <dir>]       Print knowledge base statistics\n  atex bench <questions.tsv>          Measure answer recall and output size vs whole-file reads\n  atex --selftest                     Run end-to-end TexGrid & byte-page self-test\n");
+			write_stdout("atex 0.4.7 (gold/helium-native)\nUsage:\n  atex [serve] [--atex-dir <dir>]     Run MCP stdio server\n  atex init [project_dir] [--atex-dir <dir>]  Index project docs & code into KB\n  atex install [--atex-dir <dir>] [--no-compact-window]  Wire Claude Code, Cursor, Windsurf, Gemini, Codex, Grok\n  atex uninstall                      Remove the wiring; knowledge bases stay\n  atex doctor                         Check the wiring\n  atex replay [projects_dir]          Model what each setting would have saved on your own Claude Code sessions\n  atex run \"<task>\" [--cut <tokens>] [--parts <n>] [--check \"<command>\"] [--allow-all] [-- <claude flags>]  Run a task in Claude Code in small parts, cutting context between them; --check runs your test command after every edit\n  atex stats [--atex-dir <dir>]       Print knowledge base statistics\n  atex bench <questions.tsv>          Measure answer recall and output size vs whole-file reads\n  atex --selftest                     Run end-to-end TexGrid & byte-page self-test\n");
 			flush_stdout();
 			return;
 		} else if a == "--selftest" || a == "selftest" {
@@ -3445,7 +3501,7 @@ fn main() {
 			var out byte[>..] = [];
 			out.append("{\"jsonrpc\":\"2.0\",");
 			write_id(out, d, id_node);
-			out.append(",\"result\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"atex-gold\",\"version\":\"0.4.6\"}}}\n");
+			out.append(",\"result\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"atex-gold\",\"version\":\"0.4.7\"}}}\n");
 			write_stdout(out[..]);
 			flush_stdout();
 		} else if m == "tools/list" {

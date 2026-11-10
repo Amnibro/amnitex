@@ -2,7 +2,7 @@
   "manifest_version": "0.2",
   "name": "amnitex",
   "display_name": "AmniTex (Native Helium LUT)",
-  "version": "0.4.6",
+  "version": "0.4.7",
   "description": "Lossless local byte-page memory for MCP assistants in native Gold/Helium.",
   "long_description": "AmniTex persists project knowledge and conversation turns into a local, lossless byte-page key-value store (.atex) indexed by a 2D spatial TexGrid in native Gold/Helium. Retrieves exact code, rules, and prior turn facts through an exact-match nonce texture LUT, without loss.",
   "author": {"name": "Amniscient, LLC", "url": "https://amni-scient.com"},

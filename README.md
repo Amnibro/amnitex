@@ -1,4 +1,4 @@
-# atex (amni-tex) — Native Gold/Helium Edition (v0.4.6)
+# atex (amni-tex) — Native Gold/Helium Edition (v0.4.7)
 
 **A lossless local byte-page memory layer for MCP-capable AI coding assistants. It also stores every conversation turn so earlier facts can be recalled exactly.**
 Written in [Gold](https://github.com/Amnibro/gold) and compiled to native [Helium](https://github.com/Amnibro/helium). Local. No embeddings. No cloud. MIT-licensed. Exact-match nonce lookup through an RGBA texture LUT (`index.tex`): a 15 MB knowledge base loads in 22 ms.
@@ -17,7 +17,7 @@ Or directly from GitHub Releases:
 curl -fsSL https://github.com/Amnibro/amnitex/releases/latest/download/install.sh | sh
 ```
 
-The installer also adds hooks to Claude Code and sets it to compact at about 250K tokens. `atex install --no-compact-window` turns the compact setting off, and `atex uninstall` removes the wiring.
+The installer also adds hooks to Claude Code and sets it to compact at about 250K tokens, or at about 67K tokens on Claude Haiku 5.5. `atex install --no-compact-window` turns the compact windows off, and `atex uninstall` removes the wiring.
 
 ### Install via AI Marketplaces
 
@@ -91,6 +91,21 @@ Each row is the mean of its runs, and the Claude Code sessions are `claude -p` r
 
 Against a Claude Code session without the instruction, `atex run` with grouped tool calls used 76% less input on Claude Opus 5.5 and 85% less on Claude Haiku 5.5. Claude Code 2.1.321 prices a Claude Haiku 5.5 request above 100,000 prompt tokens at five times the base rate, and `atex run` at its default `--cut` kept every request below that line.
 
+### A smaller window for Claude Haiku 5.5
+
+Claude Code's price table charges a Claude Haiku 5.5 request five times the base rate once its prompt passes 100,000 tokens. Since v0.4.7 `atex install` gives that model its own compact window of 100,000 tokens, the smallest Claude Code accepts. Claude Code then compacts at about 67K tokens, which leaves about 33K tokens of room under that line. Measured on the same 40-module task, with the SessionStart instruction on in both setups and every run passing the 360 hidden checks:
+
+| Setup | Runs | Requests above 100K | Largest request | Input tokens | API price |
+|---|---:|---:|---:|---:|---:|
+| Window of 283,000 for every model (v0.4.6) | 3 | 19 | 165K | 3.93M | $0.284 |
+| Window of 100,000 for Claude Haiku 5.5 (v0.4.7) | 3 | 0 | 70K | 2.18M | $0.085 |
+
+Each row is the mean of its runs on Claude Code 2.1.322, except the largest request, which is the largest in any run. Compaction requests are counted. Price fell by 70% and input by 44%, with about the same number of replies. The runs with the smaller window compacted one to three times each and took 317 seconds on average, against 307.
+
+- **The window follows the model.** It also applies when Claude Haiku 5.5 runs as a subagent of another model.
+- **One reply can still cross the line** when it brings in more than about 33K tokens of tool output at once.
+- **A task that needs more than about 67K tokens in view at once keeps compacting.** Give that session a larger window with `/autocompact`. `atex install` keeps a window you set yourself.
+
 ### Conversation store
 
 Reproducible via `./bench_conv_lut_bin` (`bench_conv_lut.gold`, 200 simulated turns, 20 planted facts):
@@ -127,19 +142,22 @@ Results stay current. Folders registered with `atex init <folder>` are checked o
 
 | Set | `atex_where` + one `atex_recall` | Whole files | Fewer characters |
 |---|---:|---:|---:|
-| Tuning set (22) | 27,175 | 775,593 | 96% |
-| Held-out set (10) | 21,633 | 371,443 | 94% |
+| Tuning set (22) | 28,887 | 783,969 | 96% |
+| Held-out set (10) | 21,845 | 371,443 | 94% |
 
 Measured with `atex bench <questions.tsv>`, which runs lookups with known answers and no live agent. Counts include a 41-line read at the right spot when the answer has not appeared yet. Results: [`bench/tier_tuning_results.json`](bench/tier_tuning_results.json), [`bench/tier_heldout_results.json`](bench/tier_heldout_results.json).
 
 ### Claude Code hooks and settings
 
-`atex install` adds these to `~/.claude/settings.json`, keeping everything else there and saving the old file as `settings.json.atex-backup`. The Claude Code plugin's `hooks/hooks.json` adds the same hooks, but not the compact setting.
+`atex install` adds these to `~/.claude/settings.json`, keeping everything else there and saving the old file as `settings.json.atex-backup`. The Claude Code plugin's `hooks/hooks.json` adds the same hooks, but not the compact windows.
 
 - **Stop** → `atex hook stop` saves the turn's prompt, final reply and touched files as `conv::<project>::turn_<N>`, and refreshes `conv::<project>::latest_state`.
 - **SessionStart** → `atex hook start` asks the assistant to group its tool calls. Every reply re-reads the whole context, so edits, the command that checks them and the next reads go in one reply. A step that must not follow a failure, such as a commit or a push, stays behind `&&` or waits for a later reply. Set `ATEX_TIP=0` to turn this off. After `/clear` or compaction the hook also injects `latest_state`, about 1.1K tokens holding the last three turns.
 - **PostToolUse** (Bash) → `atex hook tool` keeps a long output on disk. The assistant sees the start, the end, and any error lines, plus a note with the path to the full output. Nothing in the conversation is edited later, so the prompt cache stays valid. Set `ATEX_TOOL_CAP` to change the limit (default 4,200 characters, about 2K tokens), or to `0` to turn this off.
-- **`CLAUDE_CODE_AUTO_COMPACT_WINDOW=283000`** → compacts at about 250K tokens. A value you already set is kept. Turn it off with `atex install --no-compact-window`.
+- **`autoCompactWindow: 283000`** → Claude Code compacts at about 250K tokens.
+- **`modelSettings` → `claude-haiku-5-5` → `autoCompactWindow: 100000`** → Claude Haiku 5.5 compacts at about 67K tokens. That leaves about 33K tokens of room under the 100,000-token line, where its price goes up five times. This also applies when it runs as a subagent of another model.
+
+A window you set yourself is kept, whether it is for every model or for one. `atex install` and `atex doctor` list the windows in force, and `atex install --no-compact-window` turns off the ones atex set. Claude Code older than 2.1.288 has no window per model, so there atex sets `CLAUDE_CODE_AUTO_COMPACT_WINDOW=283000` instead. That variable overrides the windows in settings, so on newer versions atex removes the copy it wrote. A value of your own in that variable stays, and atex then leaves the windows alone.
 
 ### Run a task in small parts
 

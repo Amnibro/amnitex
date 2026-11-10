@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.4.7] — 2026-11-09
+
+### Added
+
+- `atex install` gives Claude Haiku 5.5 its own compact window of 100,000 tokens in Claude Code, so it compacts at about 67K tokens. Claude Code's price table charges a Claude Haiku 5.5 request five times the base rate once its prompt passes 100,000 tokens. On a 40-module bug-fix task, three runs with the smaller window had no request above that line and cost 70% less than three runs with the 283,000 window ($0.085 against $0.284 a run), and every run passed the same 360 hidden checks. The window also applies when Claude Haiku 5.5 runs as a subagent of another model. A window you set for that model yourself is kept.
+- `atex install` and `atex doctor` list every compact window in force. `atex doctor` also notes a window set in the shell it runs from.
+
+### Changed
+
+- The 283,000 window now lives in `autoCompactWindow` in `~/.claude/settings.json`. `CLAUDE_CODE_AUTO_COMPACT_WINDOW` overrides the windows in settings, including the ones set per model, so `atex install` removes the copy it wrote. A per-model window you set with `/autocompact` therefore applies again. A value of your own in that variable stays, and atex then leaves the windows alone. Claude Code older than 2.1.288 has no window per model and keeps the variable.
+- Run `atex install` again to get this. Claude Code sessions that are already open keep the old window until you restart them.
+
 ## [0.4.6] — 2026-11-09
 
 ### Added
