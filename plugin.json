@@ -1,6 +1,6 @@
 {
   "name": "amnitex",
-  "displayName": "AmniTex (Native Helium LUT)",
-  "version": "0.4.7",
-  "description": "Lossless local byte-page memory for MCP assistants in native Gold/Helium: exact-match nonce lookup through an RGBA texture LUT; stores every conversation turn for exact recall."
+  "displayName": "Amnitex: Context and Token Saver",
+  "version": "0.4.8",
+  "description": "Saves context and tokens in Claude Code, Cursor, Codex, Gemini CLI and other AI coding assistants: keeps context bounded, keeps long command output on disk, and remembers your project and every turn for exact, lossless recall. Free, local, MIT-licensed."
 }

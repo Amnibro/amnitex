@@ -1,23 +1,30 @@
-# atex (amni-tex) — Native Gold/Helium Edition (v0.4.7)
+# Amnitex (atex): save context and tokens in Claude Code, Cursor and other AI coding assistants
 
-**A lossless local byte-page memory layer for MCP-capable AI coding assistants. It also stores every conversation turn so earlier facts can be recalled exactly.**
-Written in [Gold](https://github.com/Amnibro/gold) and compiled to native [Helium](https://github.com/Amnibro/helium). Local. No embeddings. No cloud. MIT-licensed. Exact-match nonce lookup through an RGBA texture LUT (`index.tex`): a 15 MB knowledge base loads in 22 ms.
+**Amnitex keeps your AI coding assistant's context small.** It makes Claude Code compact sooner and restores the working state afterward, keeps long command output on disk with a pointer in context, and remembers your project and every conversation turn, so the assistant looks up the exact lines it needs instead of re-reading whole files or asking you to repeat yourself. Replayed over one person's 20 most recent long Claude Code sessions, its settings would have sent 37% fewer input tokens ([how that was measured](#what-it-saves-in-real-sessions); `atex replay` shows your own numbers).
 
-## Install (Native Helium — One Line)
+Free, local and MIT-licensed, with no cloud and no embeddings. Works with **Claude Code**, **Claude Desktop**, **Cursor**, **Windsurf**, **Gemini CLI**, **OpenAI Codex** and **Grok Build** on **Windows, macOS and Linux**. Website: [amni-scient.com/amnitex](https://amni-scient.com/amnitex).
 
-Installs the native Helium binary (`~/.local/bin/atex`), runs the self-test, indexes your workspace into `~/.atex`, and auto-wires **Claude Code**, **Claude Desktop**, **Cursor**, **Windsurf**, **Grok Build**, **OpenAI Codex**, and **Gemini CLI**:
+## Install
 
-```bash
-curl -fsSL https://amni-scient.com/atex-install.sh | sh
-```
-
-Or directly from GitHub Releases:
+**macOS and Linux**
 
 ```bash
 curl -fsSL https://github.com/Amnibro/amnitex/releases/latest/download/install.sh | sh
 ```
 
+**Windows** (PowerShell; no WSL, compiler or administrator rights needed)
+
+```powershell
+irm https://github.com/Amnibro/amnitex/releases/latest/download/install.ps1 | iex
+```
+
+The installer puts the native `atex` binary in `~/.local/bin` (`%USERPROFILE%\.local\bin` on Windows) and adds that folder to your PATH. It then runs the self-test, indexes the current folder into `~/.atex`, and wires every AI app it finds. Nothing is compiled on your machine: Linux x64, macOS (Apple Silicon and Intel) and Windows x64 get a prebuilt binary, and Windows on ARM runs the x64 one. Other systems build it with `cc`. The same installers are also served from `https://amni-scient.com/atex-install.sh` and `https://amni-scient.com/atex-install.ps1`.
+
 The installer also adds hooks to Claude Code and sets it to compact at about 250K tokens, or at about 67K tokens on Claude Haiku 5.5. `atex install --no-compact-window` turns the compact windows off, and `atex uninstall` removes the wiring.
+
+On Windows, the MCP server, the Claude Code hooks and Claude Desktop all work natively. Cursor gets the MCP server and its rule but not its hooks, which run a shell script. `atex run` and the self-test's check with several processes need a POSIX shell and use Git Bash, which Claude Code on Windows already requires; without it the self-test skips that check.
+
+Under the hood it is written in [Gold](https://github.com/Amnibro/gold) and compiled to native [Helium](https://github.com/Amnibro/helium), with exact-match lookup through an RGBA texture LUT (`index.tex`): a 15 MB knowledge base loads in 22 ms.
 
 ### Install via AI Marketplaces
 
@@ -26,7 +33,7 @@ The installer also adds hooks to Claude Code and sets it to compact at about 250
   /plugin marketplace add Amnibro/amnitex
   /plugin install amnitex@amnitex-marketplace
   ```
-- **Claude Desktop (macOS & Linux `.mcpb` Extension):**
+- **Claude Desktop (Windows, macOS and Linux `.mcpb` extension):**
   Download [`amnitex.mcpb`](https://github.com/Amnibro/amnitex/releases/latest/download/amnitex.mcpb) and open it in Claude Desktop.
 - **Grok Build Marketplace:**
   ```bash
@@ -186,7 +193,7 @@ The final reply goes to standard output, and progress and token counts go to sta
 
 A run uses the 5-minute prompt cache. Its cache writes cost 1.25× input instead of the 2× of the 1-hour cache, which is what Claude Code uses on a subscription. Because a run calls the model back to back, the cache stays warm. To choose another lifetime, set `CLAUDE_CODE_PROMPT_CACHE_TTL`.
 
-While a run is going there is no interactive screen and no Remote Control, and nobody can answer the agent's questions. Follow a part with `tail -f` on its log. A cut has a cost: each new part spends calls finding its place again, so a short task costs less with no cuts at all. It needs a POSIX shell, so it does not run on Windows.
+While a run is going there is no interactive screen and no Remote Control, and nobody can answer the agent's questions. Follow a part with `tail -f` on its log. A cut has a cost: each new part spends calls finding its place again, so a short task costs less with no cuts at all. It needs a POSIX shell. On Windows it uses Git Bash, and without Git Bash it stops with a message.
 
 `atex doctor` checks the wiring, and `atex uninstall` removes it. Run `/clear` between unrelated tasks. Recent state comes back automatically, and older turns stay available through `atex_recall` / `atex_search`.
 

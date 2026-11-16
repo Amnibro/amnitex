@@ -1,14 +1,14 @@
 {
   "name": "amnitex-marketplace",
-  "description": "Official AmniTex (Gold/Helium Native) plugin marketplace for Grok Build",
+  "description": "Amnitex for Grok Build: save context and tokens",
   "owner": {
     "name": "Amniscient, LLC"
   },
   "plugins": [
     {
       "name": "amnitex",
-      "version": "0.4.7",
-      "description": "Lossless local byte-page memory for MCP assistants in native Gold/Helium: exact-match nonce lookup through an RGBA texture LUT; stores every conversation turn for exact recall.",
+      "version": "0.4.8",
+      "description": "Saves context and tokens in Claude Code, Cursor, Codex, Gemini CLI and other AI coding assistants: keeps context bounded, keeps long command output on disk, and remembers your project and every turn for exact, lossless recall. Free, local, MIT-licensed.",
       "author": {
         "name": "Amniscient, LLC"
       },
@@ -17,7 +17,7 @@
         "source": "url",
         "url": "https://github.com/Amnibro/amnitex.git"
       },
-      "homepage": "https://amni-scient.com/amnitex-lut.html",
+      "homepage": "https://amni-scient.com/amnitex",
       "keywords": ["amnitex", "atex", "amni-scient"],
       "domains": ["amni-scient.com"]
     }

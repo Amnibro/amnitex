@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.4.8] — unreleased
+
+### Added
+
+- Windows runs natively. `irm https://github.com/Amnibro/amnitex/releases/latest/download/install.ps1 | iex` installs `atex.exe` in `%USERPROFILE%\.local\bin`, adds it to your PATH and wires your AI apps, with no WSL, compiler or administrator rights. The MCP server, the Claude Code hooks and Claude Desktop (`%APPDATA%\Claude`) work on Windows. Cursor gets its MCP server and rule there but not its hooks, which run a shell script.
+- macOS gets prebuilt binaries for Apple Silicon (macOS 11 and newer) and Intel (macOS 10.15 and newer), so the installer and the Claude Desktop extension no longer need Apple's command line tools.
+- The installer adds `~/.local/bin` to your PATH when it is missing, which is the default on macOS. Set `ATEX_NO_MODIFY_PATH=1` to skip this.
+
+### Changed
+
+- On Windows, commands atex runs, such as `atex run` and the self-test's check with several processes, use Git Bash, which Claude Code on Windows already requires. Without it, `atex run` stops with a message and the self-test skips that check.
+- Descriptions in every manifest now say what atex does for you: it saves context and tokens.
+
+### Fixed
+
+- `scripts/build-native.sh` runs Helium's bootstrap with bash, so it builds on Debian and Ubuntu, where `sh` is dash.
+- A folder path such as `C:/work/project` counts as absolute, so `atex init` on Windows indexes the folder you name.
+
 ## [0.4.7] — 2026-11-09
 
 ### Added

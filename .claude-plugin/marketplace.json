@@ -1,7 +1,7 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "amnitex-marketplace",
-  "description": "Official AmniTex (Gold/Helium Native) plugin marketplace for Claude Code",
+  "description": "Amnitex for Claude Code: save context and tokens",
   "owner": {
     "name": "Amniscient, LLC",
     "url": "https://amni-scient.com"
@@ -9,9 +9,9 @@
   "plugins": [
     {
       "name": "amnitex",
-      "displayName": "AmniTex (Native Helium LUT)",
-      "version": "0.4.7",
-      "description": "Lossless local byte-page memory for MCP assistants in native Gold/Helium: exact-match nonce lookup through an RGBA texture LUT; stores every conversation turn for exact recall.",
+      "displayName": "Amnitex: Context and Token Saver",
+      "version": "0.4.8",
+      "description": "Saves context and tokens in Claude Code, Cursor, Codex, Gemini CLI and other AI coding assistants: keeps context bounded, keeps long command output on disk, and remembers your project and every turn for exact, lossless recall. Free, local, MIT-licensed.",
       "author": {
         "name": "Amniscient, LLC",
         "url": "https://amni-scient.com"
@@ -21,7 +21,7 @@
         "source": "url",
         "url": "https://github.com/Amnibro/amnitex.git"
       },
-      "homepage": "https://amni-scient.com/amnitex-lut.html",
+      "homepage": "https://amni-scient.com/amnitex",
       "keywords": ["amnitex", "atex", "helium", "gold", "context-lut", "memory"]
     }
   ]

@@ -27,3 +27,5 @@ paper/*.synctex.gz
 *.gold.lock
 .helium/
 .hclib
+/atex-bin
+/atex-test

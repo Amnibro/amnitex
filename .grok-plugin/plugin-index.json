@@ -6,13 +6,13 @@
         "skills": [
           {
             "name": "amnitex",
-            "description": "Lossless byte-page memory layer and conversation turn store in native Gold/Helium."
+            "description": "Saves context and tokens in Claude Code, Cursor, Codex, Gemini CLI and other AI coding assistants: keeps context bounded, keeps long command output on disk, and remembers your project and every turn for exact, lossless recall. Free, local, MIT-licensed."
           }
         ],
         "commands": [
           {
             "name": "atex",
-            "description": "Initialize, inspect, or wire the native Gold/Helium AmniTex byte-page memory layer."
+            "description": "Index a project, check the wiring, or wire Amnitex into your AI apps."
           }
         ]
       }

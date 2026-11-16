@@ -1,12 +1,12 @@
 {
   "manifest_version": "0.2",
   "name": "amnitex",
-  "display_name": "AmniTex (Native Helium LUT)",
-  "version": "0.4.7",
-  "description": "Lossless local byte-page memory for MCP assistants in native Gold/Helium.",
-  "long_description": "AmniTex persists project knowledge and conversation turns into a local, lossless byte-page key-value store (.atex) indexed by a 2D spatial TexGrid in native Gold/Helium. Retrieves exact code, rules, and prior turn facts through an exact-match nonce texture LUT, without loss.",
+  "display_name": "Amnitex: Context and Token Saver",
+  "version": "0.4.8",
+  "description": "Saves context and tokens in Claude Code, Cursor and other AI coding assistants. Free and local.",
+  "long_description": "Amnitex (atex) saves context and tokens for AI assistants. It keeps your project docs, code and every conversation turn in a local, lossless store, so the assistant looks up the exact lines it needs instead of reading whole files or asking you to repeat yourself. A native binary for Windows, macOS and Linux. No cloud, no embeddings, MIT-licensed.",
   "author": {"name": "Amniscient, LLC", "url": "https://amni-scient.com"},
-  "homepage": "https://amni-scient.com/amnitex-lut.html",
+  "homepage": "https://amni-scient.com/amnitex",
   "support": "https://github.com/Amnibro/amnitex/issues",
   "license": "MIT",
   "server": {
@@ -26,8 +26,8 @@
     {"name": "atex_list_keys", "description": "List keys in the atex KB matching a prefix."},
     {"name": "atex_stats", "description": "Get atex KB statistics and unbiased context tracker report path."}
   ],
-  "keywords": ["amnitex", "atex", "helium", "gold", "memory", "lut", "context", "mcp"],
-  "compatibility": {"platforms": ["darwin", "linux"], "runtimes": {"node": ">=18.0.0"}},
+  "keywords": ["amnitex", "atex", "context", "tokens", "memory", "claude code", "cursor", "mcp"],
+  "compatibility": {"platforms": ["darwin", "linux", "win32"], "runtimes": {"node": ">=18.0.0"}},
   "user_config": {
     "atex_dir": {
       "type": "string",

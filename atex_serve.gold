@@ -940,8 +940,21 @@ fn walk_index(dir const byte[:], rel const byte[:], depth int) int {
 	}
 	count
 }
+fn on_windows() bool {
+	var v byte[>..] = [];
+	env("OS", v) && v[..] == "Windows_NT"
+}
+fn have_sh() bool {
+	if !on_windows() { return true; }
+	var v byte[>..] = [];
+	env("ATEX_SH", v) && v.len > 0
+}
+fn is_abs(p const byte[:]) bool {
+	(p.len > 0 && (p[0] == '/' || p[0] == '\\')) || (p.len > 2 && p[1] == ':' && (p[2] == '/' || p[2] == '\\'))
+}
+fn exe_name() const byte[:] { if on_windows() { "atex.exe" } else { "atex" } }
 fn abs_path(p const byte[:]) byte[>..] {
-	if p.len > 0 && p[0] == '/' { return str(p); }
+	if is_abs(p) { return str(p); }
 	var cwd byte[>..] = [];
 	if !env("PWD", cwd) { return str(p); }
 	if p.len == 0 || p == "." { return cwd; }
@@ -1290,7 +1303,8 @@ fn windows_text(d json::Doc&, root int, pre const byte[:]) byte[>..] {
 }
 fn claude_old(kb const byte[:]) bool {
 	let f = str(kb, "/claude-version.tmp~");
-	run_command(str("claude --version > ", sh_q(f[..]), " 2> /dev/null < /dev/null")[..]);
+	let vc = if have_sh() { str("claude --version > ", sh_q(f[..]), " 2> /dev/null < /dev/null") } else { str("claude --version > \"", f, "\" 2>nul <nul") };
+	run_command(vc[..]);
 	var v byte[>..] = [];
 	read_file(f[..], v);
 	delete_file(f[..]);
@@ -1366,9 +1380,9 @@ fn hooks_update(path const byte[:], rows const byte[>..][:], win0 int, seed cons
 fn claude_rows(bin_path const byte[:], kb_dir const byte[:]) byte[>..][>..] {
 	var rows byte[>..][>..] = [];
 	var q byte[>..] = [];
-	sh_quote(q, bin_path);
+	hook_quote(q, bin_path);
 	var kq byte[>..] = [];
-	sh_quote(kq, kb_dir);
+	hook_quote(kq, kb_dir);
 	for ev in ["Stop", "SessionStart", "PostToolUse"] {
 		let kind = if ev == "Stop" { "stop" } else if ev == "SessionStart" { "start" } else { "tool" };
 		let ma = if ev == "PostToolUse" { "\"matcher\":\"Bash\"," } else { "" };
@@ -1379,8 +1393,13 @@ fn claude_rows(bin_path const byte[:], kb_dir const byte[:]) byte[>..][>..] {
 }
 fn cursor_rule() const byte[:] { "---\ndescription: Keep Cursor prompts small with AmniTex\nalwaysApply: true\n---\n\nDo not reread a whole file or paste a whole tool log. Use atex_where to find the file, then atex_recall with query or lines. A large or repeated read is replaced by a short excerpt before it reaches the model.\n" }
 fn wire_cursor(hm const byte[:], bin_path const byte[:], kb_dir const byte[:]) {
-	make_dir(str(hm, "/.cursor/hooks"));
 	make_dir(str(hm, "/.cursor/rules"));
+	if on_windows() {
+		write_file(str(hm, "/.cursor/rules/amnitex.mdc"), cursor_rule());
+		write_stdout("  + Cursor rule (~/.cursor/rules/amnitex.mdc). Cursor hooks run a shell script, so they are not added on Windows\n");
+		return;
+	}
+	make_dir(str(hm, "/.cursor/hooks"));
 	let script = str(hm, "/.cursor/hooks/atex-cursor");
 	var q byte[>..] = [];
 	sh_quote(q, bin_path);
@@ -1456,6 +1475,8 @@ fn run_uninstall() {
 	if file_exists(str(hm, "/.cursor/hooks.json")) && hooks_update(str(hm, "/.cursor/hooks.json")[..], none[..], 0, "{}") > 0 { write_stdout("  - Cursor hooks\n"); }
 	for f in ["/.cursor/hooks/atex-cursor", "/.cursor/rules/amnitex.mdc"] { if delete_file(str(hm, f)) { write_stdout(str("  - ~", f, "\n")[..]); } }
 	for f in ["/.claude.json", "/.cursor/mcp.json", "/.codeium/windsurf/mcp_config.json", "/.gemini/settings.json", "/.config/Claude/claude_desktop_config.json", "/Library/Application Support/Claude/claude_desktop_config.json"] { if mcp_drop(str(hm, f)[..]) { write_stdout(str("  - MCP server from ~", f, "\n")[..]); } }
+	var ad byte[>..] = [];
+	if on_windows() && env("APPDATA", ad) && ad.len > 0 && mcp_drop(str(ad, "/Claude/claude_desktop_config.json")[..]) { write_stdout("  - MCP server from %APPDATA%\\Claude\\claude_desktop_config.json\n"); }
 	for f in ["/.codex/config.toml", "/.grok/config.toml"] { if toml_drop(str(hm, f)[..]) { write_stdout(str("  - MCP server from ~", f, "\n")[..]); } }
 	write_stdout("[atex uninstall] done. Knowledge bases were left in place. Backups end in .atex-backup.\n");
 	flush_stdout();
@@ -1465,11 +1486,22 @@ fn doctor_row(ok bool, text const byte[:], fails int&) {
 	if !ok { fails += 1; }
 }
 fn hook_kb(raw const byte[:]) byte[>..] {
-	let at = find(raw, " hook stop --atex-dir '");
+	let at = find(raw, " hook stop --atex-dir ");
 	if at < 0 { return str(""); }
-	let s = at + 23;
-	let e = find(raw[s..], "'");
-	if e < 0 { str("") } else { str(raw[s..s + e]) }
+	let r = raw[at + 22..];
+	if r.len > 0 && r[0] == '\'' {
+		let e = find(r[1..], "'");
+		if e < 0 { return str(""); }
+		return str(r[1..1 + e]);
+	}
+	if r.len > 1 && r[0] == '\\' && r[1] == '"' {
+		let e = find(r[2..], "\\\"");
+		if e < 0 { return str(""); }
+		return str(r[2..2 + e]);
+	}
+	var e = 0;
+	while e < r.len && r[e] != '"' && r[e] != ' ' { e += 1; }
+	str(r[..e])
 }
 fn start_all(d json::Doc&, root int) bool {
 	let ss = json::member(d, json::member(d, root, "hooks"), "SessionStart");
@@ -1492,7 +1524,7 @@ fn run_doctor() {
 	var hm byte[>..] = [];
 	env("HOME", hm);
 	var fails = 0;
-	write_stdout("atex 0.4.7 (gold/helium-native)\n");
+	write_stdout("atex 0.4.8 (gold/helium-native)\n");
 	if is_dir(str(hm, "/.claude")) {
 		var raw byte[>..] = [];
 		read_file(str(hm, "/.claude/settings.json"), raw);
@@ -1518,7 +1550,12 @@ fn run_doctor() {
 		let hk = hook_kb(raw[..]);
 		if okm && hk.len > 0 { doctor_row(mk == hk[..], str("one knowledge base for hooks and search (hooks ", hk, ", search ", mk, ")")[..], fails); }
 	}
-	if is_dir(str(hm, "/.cursor")) {
+	if is_dir(str(hm, "/.cursor")) && on_windows() {
+		doctor_row(file_exists(str(hm, "/.cursor/rules/amnitex.mdc")), "Cursor rule", fails);
+		var wm byte[>..] = [];
+		read_file(str(hm, "/.cursor/mcp.json"), wm);
+		doctor_row(find(wm[..], "amnitex") >= 0, "Cursor MCP server", fails);
+	} else if is_dir(str(hm, "/.cursor")) {
 		let script = str(hm, "/.cursor/hooks/atex-cursor");
 		doctor_row(file_exists(script), "Cursor hook script", fails);
 		var hj byte[>..] = [];
@@ -1722,7 +1759,8 @@ fn run_install(bin_arg const byte[:], kb_dir const byte[:]) {
 	var hm byte[>..] = [];
 	env("HOME", hm);
 	var rd byte[>..] = [];
-	let bin_path = if resource_dir(rd) && rd.len > 0 && file_exists(str(rd, "/atex")) { str(rd, "/atex") } else if file_exists(str(hm, "/.local/bin/atex")) { str(hm, "/.local/bin/atex") } else { str(bin_arg) };
+	let exe = exe_name();
+	let bin_path = if resource_dir(rd) && rd.len > 0 && file_exists(str(rd, "/", exe)) { str(rd, "/", exe) } else if file_exists(str(hm, "/.local/bin/", exe)) { str(hm, "/.local/bin/", exe) } else { str(bin_arg) };
 	var wired = 0;
 	if hm.len > 0 {
 		if wire_json_mcp(str(hm, "/.claude.json")[..], bin_path[..], kb_dir) {
@@ -1777,6 +1815,13 @@ fn run_install(bin_arg const byte[:], kb_dir const byte[:]) {
 				wired += 1;
 			}
 		}
+		var ad byte[>..] = [];
+		if on_windows() && env("APPDATA", ad) && ad.len > 0 && is_dir(str(ad, "/Claude")) {
+			if wire_json_mcp(str(ad, "/Claude/claude_desktop_config.json")[..], bin_path[..], kb_dir) {
+				write_stdout("  + wired Claude Desktop (%APPDATA%\\Claude\\claude_desktop_config.json)\n");
+				wired += 1;
+			}
+		}
 		if is_dir(str(hm, "/.codex")) {
 			let cx = str(hm, "/.codex/config.toml");
 			var raw byte[>..] = [];
@@ -1810,6 +1855,17 @@ fn sh_quote(out byte[>..]&, v const byte[:]) {
 	}
 	out.push('\'');
 }
+fn hook_quote(out byte[>..]&, v const byte[:]) {
+	if !on_windows() { sh_quote(out, v); return; }
+	var plain = v.len > 0;
+	for c in v {
+		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '/' || c == '.' || c == '_' || c == '-' || c == ':') { plain = false; }
+	}
+	if plain { out.append(v); return; }
+	out.push('"');
+	out.append(v);
+	out.push('"');
+}
 fn run_selftest() int {
 	var tmp byte[>..] = [];
 	if !env("TMPDIR", tmp) || tmp.len == 0 { tmp.clear(); tmp.append("/tmp"); }
@@ -1837,7 +1893,8 @@ fn run_selftest() int {
 		cmd.append(" >/dev/null 2>&1 &\n");
 	}
 	cmd.append("wait\n");
-	run_command(cmd[..]);
+	let conc = have_sh();
+	if conc { run_command(cmd[..]); }
 	load_kb(tdir[..]);
 	var intact = 0;
 	for i in 0..writers {
@@ -1865,11 +1922,17 @@ fn run_selftest() int {
 	kb_sweep();
 	tiers = tiers && find(where_text("CHANGED_VALUE", 3, "")[..], "project::tier.py") < 0;
 	var rm byte[>..] = [];
-	rm.append("rm -rf ");
-	sh_quote(rm, tdir[..]);
+	if conc {
+		rm.append("rm -rf ");
+		sh_quote(rm, tdir[..]);
+	} else {
+		rm.append("rmdir /s /q \"");
+		for c in tdir { rm.push(if c == '/' { '\\' } else { c }); }
+		rm.push('"');
+	}
 	run_command(rm[..]);
-	if ok && renewed && intact == writers && unlocked && tiers {
-		write_stdout(str("[atex selftest] PASS (gold/helium-native, recall=1/1, exact_match=true, concurrent=", intact, "/", writers, ", tiers=true)\n")[..]);
+	if ok && renewed && (intact == writers || !conc) && unlocked && tiers {
+		write_stdout(str("[atex selftest] PASS (gold/helium-native, recall=1/1, exact_match=true, concurrent=", if conc { str(intact, "/", writers) } else { str("skipped, no POSIX shell") }, ", tiers=true)\n")[..]);
 		flush_stdout();
 		0
 	} else {
@@ -2789,7 +2852,7 @@ fn run_bench(tsv const byte[:]) {
 		rows.append("}");
 	}
 	var out byte[>..] = [];
-	out.append("{\"engine\":\"atex 0.4.7\",\"k\":");
+	out.append("{\"engine\":\"atex 0.4.8\",\"k\":");
 	format(out, DEF_K);
 	out.append(",\"max_chars\":");
 	format(out, DEF_MC);
@@ -3425,11 +3488,11 @@ fn main() {
 	while i < av.len {
 		let a = av[i];
 		if a == "--version" || a == "-v" {
-			write_stdout("atex 0.4.7 (gold/helium-native)\n");
+			write_stdout("atex 0.4.8 (gold/helium-native)\n");
 			flush_stdout();
 			return;
 		} else if a == "--help" || a == "-h" || a == "help" {
-			write_stdout("atex 0.4.7 (gold/helium-native)\nUsage:\n  atex [serve] [--atex-dir <dir>]     Run MCP stdio server\n  atex init [project_dir] [--atex-dir <dir>]  Index project docs & code into KB\n  atex install [--atex-dir <dir>] [--no-compact-window]  Wire Claude Code, Cursor, Windsurf, Gemini, Codex, Grok\n  atex uninstall                      Remove the wiring; knowledge bases stay\n  atex doctor                         Check the wiring\n  atex replay [projects_dir]          Model what each setting would have saved on your own Claude Code sessions\n  atex run \"<task>\" [--cut <tokens>] [--parts <n>] [--check \"<command>\"] [--allow-all] [-- <claude flags>]  Run a task in Claude Code in small parts, cutting context between them; --check runs your test command after every edit\n  atex stats [--atex-dir <dir>]       Print knowledge base statistics\n  atex bench <questions.tsv>          Measure answer recall and output size vs whole-file reads\n  atex --selftest                     Run end-to-end TexGrid & byte-page self-test\n");
+			write_stdout("atex 0.4.8 (gold/helium-native)\nUsage:\n  atex [serve] [--atex-dir <dir>]     Run MCP stdio server\n  atex init [project_dir] [--atex-dir <dir>]  Index project docs & code into KB\n  atex install [--atex-dir <dir>] [--no-compact-window]  Wire Claude Code, Cursor, Windsurf, Gemini, Codex, Grok\n  atex uninstall                      Remove the wiring; knowledge bases stay\n  atex doctor                         Check the wiring\n  atex replay [projects_dir]          Model what each setting would have saved on your own Claude Code sessions\n  atex run \"<task>\" [--cut <tokens>] [--parts <n>] [--check \"<command>\"] [--allow-all] [-- <claude flags>]  Run a task in Claude Code in small parts, cutting context between them; --check runs your test command after every edit\n  atex stats [--atex-dir <dir>]       Print knowledge base statistics\n  atex bench <questions.tsv>          Measure answer recall and output size vs whole-file reads\n  atex --selftest                     Run end-to-end TexGrid & byte-page self-test\n");
 			flush_stdout();
 			return;
 		} else if a == "--selftest" || a == "selftest" {
@@ -3442,6 +3505,10 @@ fn main() {
 			dir.append(av[i + 1]);
 			i += 2;
 		} else if cmd.len == 0 && a == "run" {
+			if !have_sh() {
+				write_stderr("[atex run] needs a POSIX shell. On Windows, install Git for Windows, or set ATEX_SH to the path of its bash.exe.\n");
+				exit(2);
+			}
 			var own byte[>..][>..] = [];
 			for x in av { own.push(str(x)); }
 			exit(run_args(own[..], i + 1, dir[..]));
@@ -3501,7 +3568,7 @@ fn main() {
 			var out byte[>..] = [];
 			out.append("{\"jsonrpc\":\"2.0\",");
 			write_id(out, d, id_node);
-			out.append(",\"result\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"atex-gold\",\"version\":\"0.4.7\"}}}\n");
+			out.append(",\"result\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"atex-gold\",\"version\":\"0.4.8\"}}}\n");
 			write_stdout(out[..]);
 			flush_stdout();
 		} else if m == "tools/list" {

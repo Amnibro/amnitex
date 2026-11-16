@@ -1,7 +1,7 @@
 {
   "name": "amnitex-marketplace",
   "interface": {
-    "displayName": "AmniTex Official"
+    "displayName": "Amnitex"
   },
   "plugins": [
     {
