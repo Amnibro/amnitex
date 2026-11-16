@@ -17,8 +17,7 @@ TMP="$(mktemp -d "${TMPDIR:-/tmp}/atex-install.XXXXXX")"
 trap 'rm -rf "$TMP"' EXIT INT TERM
 case "$OS/$ARCH" in
   Linux/x86_64) PREBUILT=atex-linux-x64 ;;
-  Darwin/arm64 | Darwin/aarch64) PREBUILT=atex-macos-arm64 ;;
-  Darwin/x86_64) PREBUILT=atex-macos-x64 ;;
+  Darwin/arm64 | Darwin/aarch64 | Darwin/x86_64) PREBUILT=atex-macos ;;
   *) PREBUILT= ;;
 esac
 if [ -f "$ROOT/atex_serve.amni" ]; then

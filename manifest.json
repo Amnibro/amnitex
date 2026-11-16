@@ -10,12 +10,16 @@
   "support": "https://github.com/Amnibro/amnitex/issues",
   "license": "MIT",
   "server": {
-    "type": "node",
-    "entry_point": "mcpb-entry.mjs",
+    "type": "binary",
+    "entry_point": "bin/atex-linux-x64",
     "mcp_config": {
-      "command": "node",
-      "args": ["${__dirname}/mcpb-entry.mjs"],
-      "env": {"ATEX_DIR": "${user_config.atex_dir}"}
+      "command": "${__dirname}/bin/atex-linux-x64",
+      "args": ["serve"],
+      "env": {"ATEX_DIR": "${user_config.atex_dir}"},
+      "platform_overrides": {
+        "darwin": {"command": "${__dirname}/bin/atex-macos"},
+        "win32": {"command": "${__dirname}/bin/atex-windows-x64.exe"}
+      }
     }
   },
   "tools": [
@@ -27,7 +31,7 @@
     {"name": "atex_stats", "description": "Get atex KB statistics and unbiased context tracker report path."}
   ],
   "keywords": ["amnitex", "atex", "context", "tokens", "memory", "claude code", "cursor", "mcp"],
-  "compatibility": {"platforms": ["darwin", "linux", "win32"], "runtimes": {"node": ">=18.0.0"}},
+  "compatibility": {"platforms": ["darwin", "linux", "win32"]},
   "user_config": {
     "atex_dir": {
       "type": "string",

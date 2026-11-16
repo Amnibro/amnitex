@@ -5,7 +5,8 @@
 ### Added
 
 - Windows runs natively. `irm https://github.com/Amnibro/amnitex/releases/latest/download/install.ps1 | iex` installs `atex.exe` in `%USERPROFILE%\.local\bin`, adds it to your PATH and wires your AI apps, with no WSL, compiler or administrator rights. The MCP server, the Claude Code hooks and Claude Desktop (`%APPDATA%\Claude`) work on Windows. Cursor gets its MCP server and rule there but not its hooks, which run a shell script.
-- macOS gets prebuilt binaries for Apple Silicon (macOS 11 and newer) and Intel (macOS 10.15 and newer), so the installer and the Claude Desktop extension no longer need Apple's command line tools.
+- macOS gets one prebuilt universal binary for Apple Silicon (macOS 11 and newer) and Intel (macOS 10.15 and newer), so the installer and the Claude Desktop extension no longer need Apple's command line tools.
+- The Claude Desktop extension runs the native Helium binary directly on Windows, macOS and Linux. The Node.js wrapper, `mcpb-entry.mjs`, is gone, and so is the extension's need for Node.js.
 - The installer adds `~/.local/bin` to your PATH when it is missing, which is the default on macOS. Set `ATEX_NO_MODIFY_PATH=1` to skip this.
 
 ### Changed

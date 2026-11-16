@@ -22,13 +22,23 @@ HC_LIB=hclib "$HC" build atex_serve.amni -o "$P/src/atex.c"
 cp "$H/hc/hrt.h" "$P/src/hrt.h"
 cp -R win "$P/src/win"
 CF="-O2 -fwrapv -w -s -I$P/src"
-$ZIG cc -target aarch64-macos.11.0 $CF "$P/src/atex.c" -o "$P/bin/atex-macos-arm64" -lm -lpthread
-$ZIG cc -target x86_64-macos.10.15 $CF "$P/src/atex.c" -o "$P/bin/atex-macos-x64" -lm -lpthread
+$ZIG cc -target aarch64-macos.11.0 $CF "$P/src/atex.c" -o "$O/atex-macos-arm64" -lm -lpthread
+$ZIG cc -target x86_64-macos.10.15 $CF "$P/src/atex.c" -o "$O/atex-macos-x64" -lm -lpthread
+# One universal macOS binary, as lipo writes it: a fat header, the x86_64 slice
+# at 4 KiB and the arm64 slice at the next 16 KiB boundary.
+be32() { printf "$(printf '\\%03o' $(($1 >> 24 & 255)) $(($1 >> 16 & 255)) $(($1 >> 8 & 255)) $(($1 & 255)))"; }
+XS=$(wc -c < "$O/atex-macos-x64"); AS=$(wc -c < "$O/atex-macos-arm64"); AO=$(( (4096 + XS + 16383) / 16384 * 16384 ))
+{ be32 $((0xcafebabe)); be32 2
+  be32 $((0x01000007)); be32 3; be32 4096; be32 "$XS"; be32 12
+  be32 $((0x0100000c)); be32 0; be32 "$AO"; be32 "$AS"; be32 14
+  head -c $((4096 - 48)) /dev/zero; cat "$O/atex-macos-x64"
+  head -c $((AO - 4096 - XS)) /dev/zero; cat "$O/atex-macos-arm64"; } > "$P/bin/atex-macos"
+rm -f "$O/atex-macos-x64" "$O/atex-macos-arm64"
 $ZIG cc -target x86_64-windows-gnu $CF -include win/compat.h -Iwin/include "$P/src/atex.c" -o "$P/bin/atex-windows-x64.exe" -lpthread
 rm -f "$P"/bin/*.pdb
 if grep -q "$HOME" "$P/src/atex.c" "$P"/bin/*; then echo "build embeds \$HOME path" >&2; exit 1; fi
 cp atex_serve.gold atex_serve.amni "$P/src/"
-cp install.sh install.ps1 README.md LICENSE manifest.json mcpb-entry.mjs "$P/"
+cp install.sh install.ps1 README.md LICENSE manifest.json "$P/"
 chmod 755 "$P"/bin/* "$P/install.sh"
 tar -C "$O/pkg" -czf "$O/amnitex-helium.tar.gz" amnitex-helium
 cp "$O/amnitex-helium.tar.gz" "$O/amnitex-linux-x64.tar.gz"
