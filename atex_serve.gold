@@ -3485,7 +3485,7 @@ fn run_args(av const byte[>..][:], from int, dir0 const byte[:]) int {
 // key whose public half is release_pub(), whose binary matches its line in SHA256SUMS, and whose --selftest passes on
 // this machine. release_pub() is the hex key `atex release-key` prints; while it is empty this build never updates.
 // There is no way to change the key at run time: an MCP config can set environment variables.
-fn release_pub() const byte[:] { "" }
+fn release_pub() const byte[:] { "cc881aab89d53b2572549501f238ec280b640580f1820f36bd15a6db235eaa36" }
 fn atex_version() const byte[:] { "0.4.8" }
 var UPD_LOG byte[>..];
 fn upd_say(m const byte[:]) {

@@ -24,7 +24,7 @@ HC_LIB="$LIB" "$HC" build "$R/atex_serve.amni" -o "$W/repo" > /dev/null 2>&1; ok
 PUB=$(sed -n 's/^public key: //p' "$W/k.out"); [ ${#PUB} = 64 ] && [ "$(stat -c %a "$W/key")" = 600 ]; ok $? "the key is private and its public half is 64 hex digits"
 "$W/repo" release-key "$W/key" > /dev/null 2>&1; [ $? = 1 ]; ok $? "release-key refuses to overwrite a key"
 "$W/repo" release-sign "$W/key" "$W/empty" > /dev/null 2>&1; [ $? = 1 ]; ok $? "release-sign refuses a key the build does not carry"
-ATEX_DIR="$W/kb0" "$W/repo" update > "$W/u0" 2>&1; [ $? = 1 ] && grep -q "no release key" "$W/u0"; ok $? "a build without a release key does not update"
+build nokey "" "$CUR" && ATEX_DIR="$W/kb0" "$W/nokey" update > "$W/u0" 2>&1; [ $? = 1 ] && grep -q "no release key" "$W/u0"; ok $? "a build without a release key does not update"
 
 # installed (the current version) and released 9.9.9, both carrying the test key; a signed release folder
 build old "$PUB" "$CUR" && build new "$PUB" 9.9.9; ok $? "build the old and the new atex"
