@@ -7,6 +7,8 @@ into atex_serve.amni
 import os;
 import json;
 import dictionary;
+import crypto.hash;
+import crypto.c25519;
 struct Page { fname byte[..64], idx int, used int }
 struct Entry { koff int, klen int, page int, off int, len int, src_bytes int, mt int }
 struct Hit { id int, score int, conf int }
@@ -3479,6 +3481,268 @@ fn run_args(av const byte[>..][:], from int, dir0 const byte[:]) int {
 	let bin = if find(a0[..], "/") > 0 && pwd.len > 0 { str(pwd, "/", a0) } else { str(a0) };
 	run_task(task[..], dir[..], cut, parts, allow, extra[..], bin[..], check[..])
 }
+// Self-update. atex replaces itself only with a release whose SHA256SUMS carries a valid Ed25519 signature from the
+// key whose public half is release_pub(), whose binary matches its line in SHA256SUMS, and whose --selftest passes on
+// this machine. release_pub() is the hex key `atex release-key` prints; while it is empty this build never updates.
+// There is no way to change the key at run time: an MCP config can set environment variables.
+fn release_pub() const byte[:] { "" }
+fn atex_version() const byte[:] { "0.4.8" }
+var UPD_LOG byte[>..];
+fn upd_say(m const byte[:]) {
+	if UPD_LOG.len > 0 { append_file(UPD_LOG[..], str(time_ns() / 1000000000, " ", m, "\n")[..]); return; }
+	write_stdout(str("[atex update] ", m, "\n")[..]);
+	flush_stdout();
+}
+fn hexstr(b const byte[:]) byte[>..] {
+	var o byte[>..] = [];
+	let d = "0123456789abcdef";
+	for c in b { o.push(d[(c >> 4) as int]); o.push(d[(c & 15) as int]); }
+	o
+}
+fn hexval(c byte) int { if c >= '0' && c <= '9' { (c - '0') as int } else if c >= 'a' && c <= 'f' { (c - 'a') as int + 10 } else if c >= 'A' && c <= 'F' { (c - 'A') as int + 10 } else { -1 } }
+fn unhexstr(s const byte[:], out byte[>..]&) bool {
+	out.clear();
+	let t = trim(s);
+	if t.len % 2 != 0 { return false; }
+	var i = 0;
+	while i < t.len {
+		let hi = hexval(t[i]);
+		let lo = hexval(t[i + 1]);
+		if hi < 0 || lo < 0 { return false; }
+		out.push((hi * 16 + lo) as byte);
+		i += 2;
+	}
+	true
+}
+// "1.2.3" (or "v1.2.3") as one comparable number
+fn ver_num(v const byte[:]) int {
+	var n = 0;
+	var part = 0;
+	var parts = 0;
+	for c in trim(v) {
+		if c >= '0' && c <= '9' { part = part * 10 + (c - '0') as int; }
+		else if c == '.' { n = n * 1000 + part; part = 0; parts += 1; }
+		else if c == 'v' && n == 0 && part == 0 && parts == 0 { continue; }
+		else { break; }
+	}
+	n = n * 1000 + part;
+	parts += 1;
+	while parts < 3 { n = n * 1000; parts += 1; }
+	n
+}
+fn hq(v const byte[:]) byte[>..] { var o byte[>..] = []; hook_quote(o, v); o }
+fn base_name(p const byte[:]) const byte[:] {
+	var k = p.len;
+	while k > 0 && p[k - 1] != '/' && p[k - 1] != '\\' { k -= 1; }
+	p[k..]
+}
+// true when SHA256SUMS lists `name` with the SHA-256 of `data`
+fn sum_ok(sums const byte[:], name const byte[:], data const byte[:]) bool {
+	let want = hexstr(crypto::sha256(data)[..]);
+	for l in split(sums, '\n') {
+		let w = split(trim(l), ' ');
+		if w.len < 2 { continue; }
+		let nm = trim(w[w.len - 1]);
+		let n2 = if nm.len > 0 && nm[0] == '*' { nm[1..] } else { nm };
+		if n2 == name { return lower(trim(w[0]))[..] == want[..]; }
+	}
+	false
+}
+fn upd_fetch(url const byte[:], path const byte[:]) bool {
+	delete_file(path);
+	var c byte[>..] = [];
+	if on_windows() {
+		c.append("powershell -NoProfile -NonInteractive -Command \"$ProgressPreference='SilentlyContinue'; Invoke-WebRequest -UseBasicParsing -Uri '");
+		c.append(url);
+		c.append("' -OutFile '");
+		c.append(path);
+		c.append("'\" < nul > nul 2>&1");
+	} else {
+		c.append("curl -fsSL --max-time 300 -o ");
+		sh_quote(c, path);
+		c.push(' ');
+		sh_quote(c, url);
+		c.append(" < /dev/null > /dev/null 2>&1");
+	}
+	run_command(c[..]) == 0 && file_exists(path)
+}
+fn upd_asset(tmp const byte[:], out byte[>..]&) bool {
+	out.clear();
+	if on_windows() { out.append("atex-windows-x64.exe"); return true; }
+	let f = str(tmp, "/uname");
+	run_command(str("uname -sm > ", sh_q(f[..]), " 2> /dev/null < /dev/null")[..]);
+	var u byte[>..] = [];
+	read_file(f[..], u);
+	delete_file(f[..]);
+	let t = trim(u[..]);
+	if t.starts_with("Linux") && find(t, "x86_64") >= 0 { out.append("atex-linux-x64"); return true; }
+	if t.starts_with("Darwin") { out.append("atex-macos"); return true; }
+	false
+}
+// this process's own executable: /proc on Linux (through the shell's parent), the module path on Windows, else argv[0]
+fn upd_self(tmp const byte[:], out byte[>..]&) bool {
+	out.clear();
+	let av = args();
+	let a0 = if av.len > 0 { av[0] } else { "" };
+	if on_windows() {
+		var rd byte[>..] = [];
+		if !resource_dir(rd) { return false; }
+		var b byte[>..] = [];
+		b.append(base_name(a0));
+		if b.len > 0 && !ends_with(lower(b[..])[..], ".exe") { b.append(".exe"); }
+		if b.len > 0 && file_exists(str(rd, "/", b)[..]) { out.append(str(rd, "/", b)); return true; }
+		if file_exists(str(rd, "/atex.exe")[..]) { out.append(str(rd, "/atex.exe")); return true; }
+		return false;
+	}
+	let f = str(tmp, "/self");
+	run_command(str("{ readlink -f /proc/$PPID/exe 2> /dev/null || command -v ", sh_q(a0), "; } > ", sh_q(f[..]), " < /dev/null")[..]);
+	var o byte[>..] = [];
+	read_file(f[..], o);
+	delete_file(f[..]);
+	let p = trim(split(o[..], '\n')[0]);
+	if p.len == 0 { return false; }
+	out.append(abs_path(p));
+	file_exists(out[..])
+}
+// put the verified new binary in place of the running one; a running atex.exe can be renamed but not overwritten
+fn upd_swap(me const byte[:], nw const byte[:]) bool {
+	if !on_windows() { return rename_file(nw, me); }
+	let old = str(me, ".old-", random_seed() % (100000000 as uint));
+	if !rename_file(me, old[..]) { return false; }
+	if rename_file(nw, me) { return true; }
+	rename_file(old[..], me);
+	false
+}
+fn run_update(av byte[:][:], start int) int {
+	var mode = 0;
+	var auto = false;
+	var dir byte[>..] = [];
+	var i = start;
+	while i < av.len {
+		let a = av[i];
+		if a == "--check" { mode = 1; }
+		else if a == "--off" { mode = 2; }
+		else if a == "--on" { mode = 3; }
+		else if a == "--auto" { auto = true; }
+		else if a == "--atex-dir" && i + 1 < av.len { dir.clear(); dir.append(av[i + 1]); i += 1; }
+		else { write_stderr("usage: atex update [--check] [--off | --on] [--atex-dir <dir>]\n"); return 2; }
+		i += 1;
+	}
+	if dir.len == 0 { resolve_default_dir(dir); }
+	let ud = str(dir, "/update");
+	make_dir(dir[..]);
+	make_dir(ud[..]);
+	if mode == 2 { write_file(str(ud, "/off")[..], "off\n"); upd_say("automatic updates are off; atex update still installs a new release when you run it"); return 0; }
+	if mode == 3 { delete_file(str(ud, "/off")[..]); upd_say("automatic updates are on: atex serve checks at most once a day"); return 0; }
+	if auto { UPD_LOG.clear(); UPD_LOG.append(str(ud, "/log")); }
+	if release_pub().len == 0 { upd_say("this build has no release key, so it cannot update itself; install the newest release with the install script"); return 1; }
+	var pk byte[>..] = [];
+	unhexstr(release_pub(), pk);
+	var base byte[>..] = [];
+	if !env("ATEX_UPDATE_URL", base) || base.len == 0 { base.clear(); base.append("https://github.com/Amnibro/amnitex/releases/latest/download"); }
+	while base.len > 0 && base[base.len - 1] == '/' { base.pop(); }
+	for nm in ["SHA256SUMS", "SHA256SUMS.sig", "VERSION"] {
+		if !upd_fetch(str(base, "/", nm)[..], str(ud, "/", nm)[..]) { upd_say(str("could not download ", nm, " from ", base)[..]); return 1; }
+	}
+	var sums byte[>..] = [];
+	var sig byte[>..] = [];
+	var ver byte[>..] = [];
+	read_file(str(ud, "/SHA256SUMS")[..], sums);
+	read_file(str(ud, "/SHA256SUMS.sig")[..], sig);
+	read_file(str(ud, "/VERSION")[..], ver);
+	var sb byte[>..] = [];
+	if !unhexstr(sig[..], sb) || !crypto::ed25519_verify(pk[..], sums[..], sb[..]) { upd_say("the release's SHA256SUMS is not signed with this atex's release key; not updating"); return 1; }
+	if !sum_ok(sums[..], "VERSION", ver[..]) { upd_say("VERSION does not match the signed SHA256SUMS; not updating"); return 1; }
+	let nv = trim(ver[..]);
+	if ver_num(nv) <= ver_num(atex_version()) { upd_say(str("atex ", atex_version(), " is up to date")[..]); return 0; }
+	if mode == 1 { upd_say(str("atex ", nv, " is available (this is ", atex_version(), "); run atex update to install it")[..]); return 0; }
+	var asset byte[>..] = [];
+	if !upd_asset(ud[..], asset) { upd_say("there is no prebuilt atex for this platform; build it from source"); return 1; }
+	var me byte[>..] = [];
+	if !upd_self(ud[..], me) { upd_say("cannot find this atex's own file to replace"); return 1; }
+	var ls byte[>..] = [];
+	let md = str(me[..(me.len - base_name(me[..]).len)]);
+	if list_dir(md[..], ls) { for f in split(ls[..], '\n') { if f.starts_with(str(base_name(me[..]), ".old-")[..]) { delete_file(str(md, f)[..]); } } }
+	let nw = str(me, ".new");
+	if !upd_fetch(str(base, "/", asset)[..], nw[..]) { upd_say(str("could not download ", asset, " from ", base)[..]); return 1; }
+	var bin byte[>..] = [];
+	read_file(nw[..], bin);
+	if !sum_ok(sums[..], asset[..], bin[..]) { delete_file(nw[..]); upd_say(str(asset, " does not match its signed SHA-256; not updating")[..]); return 1; }
+	make_exec(nw[..]);
+	let tlog = str(ud, "/selftest.log");
+	if run_command(str(hq(nw[..]), " --selftest < ", if on_windows() { "nul" } else { "/dev/null" }, " > ", hq(tlog[..]), " 2>&1")[..]) != 0 {
+		delete_file(nw[..]);
+		upd_say(str("atex ", nv, " failed its self-test on this machine (", tlog, "); keeping ", atex_version())[..]);
+		return 1;
+	}
+	if !upd_swap(me[..], nw[..]) { delete_file(nw[..]); upd_say(str("could not replace ", me, "; keeping ", atex_version())[..]); return 1; }
+	upd_say(str("updated ", me, " from atex ", atex_version(), " to ", nv, if auto { "; it runs from the next start" } else { "" })[..]);
+	0
+}
+// from atex serve: start a background update at most once a day, unless turned off
+fn auto_update(kb const byte[:]) {
+	if release_pub().len == 0 { return; }
+	var v byte[>..] = [];
+	if env("ATEX_NO_UPDATE", v) && v.len > 0 && v[..] != "0" { return; }
+	let ud = str(kb, "/update");
+	if file_exists(str(ud, "/off")[..]) { return; }
+	make_dir(kb);
+	make_dir(ud[..]);
+	let stamp = str(ud, "/checked");
+	let m = file_mtime(stamp[..]);
+	let now = time_ns() / 1000000000;
+	if m > 0 && now - m < 86400 { return; }
+	write_file(stamp[..], str(now, "\n")[..]);
+	var me byte[>..] = [];
+	if !upd_self(ud[..], me) { return; }
+	var c byte[>..] = [];
+	if on_windows() {
+		c.append("start \"\" /b ");
+		hook_quote(c, me[..]);
+		c.append(" update --auto --atex-dir ");
+		hook_quote(c, kb);
+		c.append(" < nul > nul 2>&1");
+	} else {
+		c.append("(");
+		sh_quote(c, me[..]);
+		c.append(" update --auto --atex-dir ");
+		sh_quote(c, kb);
+		c.append(" < /dev/null > /dev/null 2>&1 &)");
+	}
+	run_command(c[..]);
+}
+// release side, on the machine that builds releases: make the signing key once, then sign each release's SHA256SUMS
+fn run_release(av byte[:][:], i int) int {
+	let usage = "usage: atex release-key <key file>\n       atex release-sign <key file> <file>\n";
+	if av[i] == "release-key" {
+		if i + 1 >= av.len { write_stderr(usage); return 2; }
+		let kf = av[i + 1];
+		if file_exists(kf) { write_stderr(str("[atex] ", kf, " already exists; a release key is never overwritten\n")[..]); return 1; }
+		if !on_windows() && !file_exists("/dev/urandom") { write_stderr("[atex] no /dev/urandom to make a key from\n"); return 1; }
+		var seed byte[>..] = [];
+		for k in 0..4 {
+			var r = random_seed();
+			for j in 0..8 { seed.push((r & (255 as uint)) as byte); r = r >> 8; }
+		}
+		if !write_file(kf, str(hexstr(seed[..]), "\n")[..]) { write_stderr(str("[atex] cannot write ", kf, "\n")[..]); return 1; }
+		if !on_windows() { run_command(str("chmod 600 ", sh_q(kf))[..]); }
+		let pub = hexstr(crypto::ed25519_public(seed[..])[..]);
+		write_stdout(str("release key written to ", kf, " (keep it private and backed up)\npublic key: ", pub, "\nPut it in atex_serve.gold, rebuild, and sign every release with this key:\n  fn release_pub() const byte[:] { \"", pub, "\" }\n")[..]);
+		return 0;
+	}
+	if i + 2 >= av.len { write_stderr(usage); return 2; }
+	var kt byte[>..] = [];
+	var seed byte[>..] = [];
+	if !read_file(av[i + 1], kt) || !unhexstr(kt[..], seed) || seed.len != 32 { write_stderr(str("[atex release-sign] ", av[i + 1], " is not a release key\n")[..]); return 1; }
+	let pub = hexstr(crypto::ed25519_public(seed[..])[..]);
+	if pub[..] != release_pub() { write_stderr(str("[atex release-sign] this key's public half is ", pub, ", but this atex was built with ", if release_pub().len == 0 { "no release key" } else { release_pub() }, "; installs could not check the release\n")[..]); return 1; }
+	var data byte[>..] = [];
+	if !read_file(av[i + 2], data) { write_stderr(str("[atex release-sign] cannot read ", av[i + 2], "\n")[..]); return 1; }
+	let sig = crypto::ed25519_sign(seed[..], data[..]);
+	write_file(str(av[i + 2], ".sig")[..], str(hexstr(sig[..]), "\n")[..]);
+	write_stdout(str("signed ", av[i + 2], " -> ", av[i + 2], ".sig\n")[..]);
+	0
+}
 fn main() {
 	let av = args();
 	var dir byte[>..] = [];
@@ -3492,7 +3756,7 @@ fn main() {
 			flush_stdout();
 			return;
 		} else if a == "--help" || a == "-h" || a == "help" {
-			write_stdout("atex 0.4.8 (gold/helium-native)\nUsage:\n  atex [serve] [--atex-dir <dir>]     Run MCP stdio server\n  atex init [project_dir] [--atex-dir <dir>]  Index project docs & code into KB\n  atex install [--atex-dir <dir>] [--no-compact-window]  Wire Claude Code, Cursor, Windsurf, Gemini, Codex, Grok\n  atex uninstall                      Remove the wiring; knowledge bases stay\n  atex doctor                         Check the wiring\n  atex replay [projects_dir]          Model what each setting would have saved on your own Claude Code sessions\n  atex run \"<task>\" [--cut <tokens>] [--parts <n>] [--check \"<command>\"] [--allow-all] [-- <claude flags>]  Run a task in Claude Code in small parts, cutting context between them; --check runs your test command after every edit\n  atex stats [--atex-dir <dir>]       Print knowledge base statistics\n  atex bench <questions.tsv>          Measure answer recall and output size vs whole-file reads\n  atex --selftest                     Run end-to-end TexGrid & byte-page self-test\n");
+			write_stdout("atex 0.4.8 (gold/helium-native)\nUsage:\n  atex [serve] [--atex-dir <dir>]     Run MCP stdio server\n  atex init [project_dir] [--atex-dir <dir>]  Index project docs & code into KB\n  atex install [--atex-dir <dir>] [--no-compact-window]  Wire Claude Code, Cursor, Windsurf, Gemini, Codex, Grok\n  atex uninstall                      Remove the wiring; knowledge bases stay\n  atex doctor                         Check the wiring\n  atex replay [projects_dir]          Model what each setting would have saved on your own Claude Code sessions\n  atex run \"<task>\" [--cut <tokens>] [--parts <n>] [--check \"<command>\"] [--allow-all] [-- <claude flags>]  Run a task in Claude Code in small parts, cutting context between them; --check runs your test command after every edit\n  atex stats [--atex-dir <dir>]       Print knowledge base statistics\n  atex bench <questions.tsv>          Measure answer recall and output size vs whole-file reads\n  atex update [--check] [--off | --on]  Install the newest signed release (atex serve checks once a day unless --off)\n  atex --selftest                     Run end-to-end TexGrid & byte-page self-test\n");
 			flush_stdout();
 			return;
 		} else if a == "--selftest" || a == "selftest" {
@@ -3512,6 +3776,10 @@ fn main() {
 			var own byte[>..][>..] = [];
 			for x in av { own.push(str(x)); }
 			exit(run_args(own[..], i + 1, dir[..]));
+		} else if cmd.len == 0 && a == "update" {
+			exit(run_update(av, i + 1));
+		} else if cmd.len == 0 && (a == "release-key" || a == "release-sign") {
+			exit(run_release(av, i));
 		} else if cmd.len == 0 && (a == "serve" || a == "init" || a == "install" || a == "stats" || a == "bench" || a == "hook" || a == "replay" || a == "doctor" || a == "uninstall") {
 			cmd.append(a);
 			i += 1;
@@ -3550,6 +3818,7 @@ fn main() {
 		flush_stdout();
 		return;
 	}
+	auto_update(dir[..]);
 	var line byte[>..] = [];
 	var d = json::Doc {};
 	while read_line(line) {

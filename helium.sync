@@ -1,0 +1,8 @@
+# gold sync: rebuild AmniTeX with the newest Helium, repair what the new compiler rejects, and commit the result to
+# the helium-sync branch only when every test below passes. Releasing stays a manual step (RELEASE.md).
+gold atex_serve.gold
+gold tests/atex_test.gold
+build atex_serve.amni atex-bin
+build tests/atex_test.amni atex-test
+test ./atex-test ./atex-bin .
+test bash tests/update_test.sh "$HC" "$HC_LIB"

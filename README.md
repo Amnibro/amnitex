@@ -22,6 +22,8 @@ The installer puts the native `atex` binary in `~/.local/bin` (`%USERPROFILE%\.l
 
 The installer also adds hooks to Claude Code and sets it to compact at about 250K tokens, or at about 67K tokens on Claude Haiku 5.5. `atex install --no-compact-window` turns the compact windows off, and `atex uninstall` removes the wiring.
 
+**Updates.** Once a day, when your AI app starts the atex server, atex checks the latest release in the background. It installs a new one only when the release's `SHA256SUMS` carries a valid signature from the AmniTeX release key built into atex, the downloaded binary matches its checksum, and the new binary passes `atex --selftest` on your machine; otherwise it keeps the version you have. The new version runs from the next start. `atex update` installs it now, `atex update --check` only reports it, and `atex update --off` (or `ATEX_NO_UPDATE=1`) turns the daily check off. The log is in `~/.atex/update/log`.
+
 On Windows, the MCP server, the Claude Code hooks and Claude Desktop all work natively. Cursor gets the MCP server and its rule but not its hooks, which run a shell script. `atex run` and the self-test's check with several processes need a POSIX shell and use Git Bash, which Claude Code on Windows already requires; without it the self-test skips that check.
 
 Under the hood it is written in [Gold](https://github.com/Amnibro/gold) and compiled to native [Helium](https://github.com/Amnibro/helium), with exact-match lookup through an RGBA texture LUT (`index.tex`): a 15 MB knowledge base loads in 22 ms.

@@ -47,6 +47,12 @@ cp install.sh install.ps1 "$O/"
 chmod 755 "$O/install.sh"
 $X validate "$P/manifest.json"
 $X pack "$P" "$O/amnitex.mcpb"
+# atex update downloads the bare binary for its platform and VERSION, checked against the signed SHA256SUMS
+cp "$P/bin/atex-linux-x64" "$P/bin/atex-macos" "$O/"
+"$O/atex-linux-x64" --version | cut -d' ' -f2 > "$O/VERSION"
 rm -rf "$O/pkg"
-(cd "$O" && sha256sum amnitex-helium.tar.gz amnitex-linux-x64.tar.gz atex-windows-x64.exe amnitex.mcpb install.sh install.ps1 > SHA256SUMS)
+(cd "$O" && sha256sum amnitex-helium.tar.gz amnitex-linux-x64.tar.gz atex-windows-x64.exe atex-linux-x64 atex-macos VERSION amnitex.mcpb install.sh install.ps1 > SHA256SUMS)
+KEY="${ATEX_RELEASE_KEY:-$HOME/.config/amnitex/release.key}"
+if [ -f "$KEY" ]; then "$O/atex-linux-x64" release-sign "$KEY" "$O/SHA256SUMS"
+else echo "build.sh: no release key at $KEY: SHA256SUMS is unsigned, so installed atex will not update to this release (see RELEASE.md)" >&2; fi
 ls -la "$O"
