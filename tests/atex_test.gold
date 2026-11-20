@@ -72,6 +72,13 @@ fn one(kb const byte[:], name const byte[:], a const byte[:]) byte[>..] {
 	if r.len > 0 { copy(r[0]) } else { str("") }
 }
 fn where(kb const byte[:], q const byte[:], extra const byte[:]) byte[>..] { one(kb, "atex_where", str("{\"query\":", js(q), extra, "}")[..]) }
+fn run_shell(rest const byte[:]) int {
+	run_command(str(quote(BIN[..]), " ", rest, " > ", quote(str(T, "/so")), " 2> ", quote(str(T, "/se")))[..])
+}
+fn same_out(cli const byte[:], mcp const byte[:]) bool {
+	if cli == mcp { return true; }
+	cli.len == mcp.len + 1 && cli[cli.len - 1] == '\n' && cli[..cli.len - 1] == mcp
+}
 fn page_used(kb const byte[:]) int {
 	var d = json::Doc {};
 	let r, _ = json::parse(slurp(str(kb, "/index.json")[..])[..], d);
@@ -291,6 +298,7 @@ fn test_install() {
 	check("a model window you set yourself is kept", ow == 500000);
 	check("the window moves out of the environment variable", !has(s1[..], "CLAUDE_CODE_AUTO_COMPACT_WINDOW") && has(out1[..], "already open"));
 	check("install lists the windows", has(out1[..], "compact window 283000 (") && has(out1[..], "compact window 100000 for claude-haiku-5-5") && has(out1[..], "compact window 500000 for claude-opus-5-5"));
+	check("install prints the shell commands for this session", has(out1[..], "atex search \"<words>\"") && has(out1[..], "atex remember") && has(out1[..], "atex keys"));
 	check("unrelated settings survive", has(s1[..], "KEEP_ME") && has(s1[..], "other-tool done") && has(s1[..], "lint-it") && has(s1[..], "Bash(ls:*)") && has(s1[..], "\"model\""));
 	check("old atex hooks are replaced", !has(s1[..], "/old/kb") && has(s1[..], " hook stop --atex-dir") && has(s1[..], " hook start --atex-dir") && has(s1[..], " hook tool --atex-dir"));
 	check("the start hook runs in every session", !has(s1[..], "clear|compact"));
@@ -301,6 +309,7 @@ fn test_install() {
 	check("doctor reports one knowledge base", has(doc[..], "ok one knowledge base"));
 	check("doctor lists the windows", has(doc[..], "ok compact window 283000 (") && has(doc[..], "ok compact window 100000 for claude-haiku-5-5") && has(doc[..], "ok compact window 500000 for claude-opus-5-5"));
 	check("doctor notes a window set in the shell", has(doc[..], "note this shell has CLAUDE_CODE_AUTO_COMPACT_WINDOW=283000"));
+	check("doctor prints the shell commands for this session", has(doc[..], "atex search \"<words>\"") && has(doc[..], "atex remember") && doc[doc.len - 10..] == "doctor ok\n");
 	at_home(hm[..], ins[..]);
 	check("install twice changes nothing", slurp(set[..]) == s1 && !has(slurp(str(T, "/last")[..])[..], "already open"));
 	at_home(hm[..], str(ins, " --no-compact-window")[..]);
@@ -583,6 +592,38 @@ fn test_check() {
 	check("without --check nothing is added", run_go(fr[..], "task") == 0 && !has(slurp(str(fr, "/kb/runs/", run_id(fr[..]), "/settings.json")[..])[..], "PostToolBatch") && !has(slurp(str(fr, "/kb/runs/", run_id(fr[..]), "/settings.json")[..])[..], "ATEX_RUN_DIR") && !has(slurp(str(fr, "/se")[..])[..], "Check"));
 	check("--check needs a command", run_go(fr[..], "task --check") == 2);
 }
+fn test_shell() {
+	let root = str(T, "/shell");
+	tree(root[..]);
+	let kb = str(root, "/kb");
+	let so = str(T, "/so");
+	let hm = str(root, "/home");
+	let mcp = one(kb[..], "atex_search", "{\"query\":\"POOL_SIZE\"}");
+	check("shell search matches the MCP tool", run_shell(str("search POOL_SIZE --atex-dir ", quote(kb[..]))[..]) == 0 && same_out(slurp(so[..])[..], mcp[..]) && slurp(str(T, "/se")[..]).len == 0);
+	let wh = where(kb[..], "pool", ",\"path\":\"pkg/\"");
+	check("shell where matches the MCP tool", run_shell(str("where pool --path pkg/ --atex-dir ", quote(kb[..]))[..]) == 0 && same_out(slurp(so[..])[..], wh[..]));
+	let rec = one(kb[..], "atex_recall", "{\"key\":\"project::pkg/auth.py\",\"query\":\"TOKEN_LIMIT\"}");
+	check("shell recall with a query matches the MCP tool", run_shell(str("recall project::pkg/auth.py --query TOKEN_LIMIT --atex-dir ", quote(kb[..]))[..]) == 0 && same_out(slurp(so[..])[..], rec[..]));
+	check("shell recall with a line range returns that line", run_shell(str("recall project::pkg/db.py --lines 1-1 --atex-dir ", quote(kb[..]))[..]) == 0 && has(slurp(so[..])[..], "POOL_SIZE = 8"));
+	check("shell recall of a missing key says so", run_shell(str("recall project::missing.py --atex-dir ", quote(kb[..]))[..]) == 0 && has(slurp(so[..])[..], "(not found)"));
+	check("shell remember saves a fact", run_shell(str("remember cli-fact --text ", quote("shell zebra marker"), " --atex-dir ", quote(kb[..]))[..]) == 0 && has(slurp(so[..])[..], "remembered as manual::cli-fact"));
+	check("shell search finds the saved fact", run_shell(str("search ", quote("shell zebra marker"), " --atex-dir ", quote(kb[..]))[..]) == 0 && has(slurp(so[..])[..], "manual::cli-fact") && has(slurp(so[..])[..], "shell zebra marker"));
+	check("shell recall returns the saved fact", run_shell(str("recall manual::cli-fact --atex-dir ", quote(kb[..]))[..]) == 0 && has(slurp(so[..])[..], "shell zebra marker"));
+	let fact = str(root, "/fact.txt");
+	write_file(fact[..], "shell file marker\n");
+	check("shell remember reads a file", run_shell(str("remember file-fact --file ", quote(fact[..]), " --atex-dir ", quote(kb[..]))[..]) == 0 && has(slurp(so[..])[..], "remembered as manual::file-fact"));
+	check("shell recall returns the file", run_shell(str("recall manual::file-fact --atex-dir ", quote(kb[..]))[..]) == 0 && has(slurp(so[..])[..], "shell file marker"));
+	check("a key that already has a prefix is kept", run_shell(str("remember manual::kept --text ", quote("kept fact"), " --atex-dir ", quote(kb[..]))[..]) == 0 && has(slurp(so[..])[..], "remembered as manual::kept") && !has(slurp(so[..])[..], "manual::manual::"));
+	check("shell remember reads stdin", run_command(str("printf '%s\\n' ", quote("shell stdin marker"), " | ", quote(BIN[..]), " remember stdin-fact --atex-dir ", quote(kb[..]), " > ", quote(so[..]), " 2> ", quote(str(T, "/se")))[..]) == 0 && has(slurp(so[..])[..], "remembered as manual::stdin-fact"));
+	check("shell keys lists the saved keys", run_shell(str("keys --prefix manual:: --atex-dir ", quote(kb[..]))[..]) == 0 && has(slurp(so[..])[..], "manual::cli-fact") && has(slurp(so[..])[..], "manual::file-fact") && has(slurp(so[..])[..], "manual::stdin-fact"));
+	check("the shell fact is visible to the MCP tool", has(one(kb[..], "atex_recall", "{\"key\":\"manual::cli-fact\"}")[..], "shell zebra marker"));
+	check("shell search needs a query", run_shell(str("search --atex-dir ", quote(kb[..]))[..]) == 2 && has(slurp(str(T, "/se")[..])[..], "needs a query"));
+	check("shell recall rejects a bad key", run_shell(str("recall ", quote("../x"), " --atex-dir ", quote(kb[..]))[..]) == 2 && has(slurp(str(T, "/se")[..])[..], "invalid key"));
+	check("shell remember rejects a bad key", run_shell(str("remember ", quote("../x"), " --text nope --atex-dir ", quote(kb[..]))[..]) == 2);
+	check("shell recall rejects a bad line range", run_shell(str("recall project::pkg/db.py --lines 9-2 --atex-dir ", quote(kb[..]))[..]) == 2 && has(slurp(str(T, "/se")[..])[..], "lines must be"));
+	check("help lists the shell commands", run_shell("--help") == 0 && has(slurp(so[..])[..], "atex search") && has(slurp(so[..])[..], "atex remember") && has(slurp(so[..])[..], "atex keys"));
+	check("doctor prints the shell commands for this session", at_home(hm[..], "doctor") == 0 && has(slurp(str(T, "/last")[..])[..], "atex search \"<words>\"") && has(slurp(str(T, "/last")[..])[..], "atex remember"));
+}
 fn test_versions(repo const byte[:]) {
 	run_command(str(quote(BIN[..]), " --version > ", quote(str(T, "/v")))[..]);
 	let line = slurp(str(T, "/v")[..]);
@@ -619,6 +660,7 @@ fn main() {
 	test_replay();
 	test_run();
 	test_check();
+	test_shell();
 	test_versions(av[2]);
 	run_command(str("rm -rf ", quote(T[..]))[..]);
 	write_stdout(str(RUNS - FAILS, " of ", RUNS, " checks passed\n")[..]);

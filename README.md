@@ -224,6 +224,18 @@ While a run is going there is no interactive screen and no Remote Control, and n
 
 Server-side validation: `atex_remember` keys must match `^[a-zA-Z0-9_\-./:(),'—]{1,256}$`, must not contain `..`, text payload capped at 1 MiB.
 
+The same tools are shell commands, so they work in the session that installed atex. Cursor, Claude Code, Gemini CLI, and the other clients load the MCP server when a session starts, and a session that is already running does not gain the new tools. `atex doctor` and `atex install` print the commands:
+
+```bash
+atex search "<words>" [--exact] [--page N]
+atex where "<words>" [--path <prefix>]
+atex recall <key> [--query "<words>" | --lines a-b]
+atex remember <key> [--text "<fact>" | --file <path>]
+atex keys [--prefix <prefix>]
+```
+
+`atex remember` reads stdin when neither `--text` nor `--file` is set. A key without a `manual::` or `conv::` prefix is stored under `manual::`.
+
 Several servers and hooks can share one knowledge base. Each write takes a short lock (`write.lock` in the KB folder) and picks up other writers' changes first, so facts are not lost when sessions write at the same moment. A lock left by a crashed process is cleared after 30 seconds. If a write cannot get the lock within 40 seconds, or the folder is read-only, `atex_remember` returns an error instead of reporting success.
 
 ## Storage format

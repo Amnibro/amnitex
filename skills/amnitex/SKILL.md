@@ -1,6 +1,6 @@
 ---
 name: amnitex
-description: Lossless local byte-page memory in native Gold/Helium. Call atex_where, atex_search, and atex_recall before reading full files.
+description: Lossless local byte-page memory in native Gold/Helium. Call atex_where, atex_search, and atex_recall before reading full files. If those tools are not in this session, use atex where, atex search, atex recall, and atex remember in the shell.
 ---
 
 # AmniTex (Native Gold/Helium Memory)
@@ -11,6 +11,18 @@ description: Lossless local byte-page memory in native Gold/Helium. Call atex_wh
 2. **Before reading full files:** Call `atex_where(query="...")` to find the file, then `atex_recall(key, query="...")` for just its matching lines. Use `atex_search(query="...")` or `atex_list_keys(prefix="...")` to locate exact documentation sections, architecture maps, build rules, and prior turn facts through the native Helium nonce texture LUT.
 3. **When the user teaches a persistent project fact:** Call `atex_remember(key="manual::<topic>", text="...")` so it is stored losslessly in `.atex` across sessions and AI tools.
 4. **When a Bash result ends in a note with a saved path:** The full output is on disk. Search that file with rg or print a range with sed -n instead of running the command again.
+5. **When `atex_search` is not a tool in this session:** The MCP server loads at session start. Use the shell; the output matches the tools.
+
+```bash
+atex search "<words>"
+atex where "<words>"
+atex recall <key> --query "<words>"
+atex recall <key> --lines a-b
+atex remember <key> --text "<fact>"
+atex keys --prefix <prefix>
+```
+
+`atex doctor` prints this list.
 
 ## Reading Results Without Loss
 
