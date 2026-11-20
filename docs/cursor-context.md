@@ -17,3 +17,7 @@ Fetched 2026-11-09 from [Cursor hooks](https://cursor.com/docs/hooks) and the [c
 Cloud agents, from the same page: project `.cursor/hooks.json` runs; user `~/.cursor/hooks.json` does not. `sessionStart` is deferred. `postToolUse` on cloud agents gets a redacted tool result and cannot replace it with `updated_mcp_tool_output`. `preToolUse` `updated_input` is ignored for HTTP MCP tools.
 
 User and assistant turns are still resent by Cursor on every ordinary turn. Nothing in the documented hook outputs deletes earlier messages.
+
+## Same session
+
+Cursor reads `mcp.json` when a session starts. The [MCP docs](https://cursor.com/docs/context/mcp) say to restart Cursor after changing a custom server, and the only programmatic registration is the IDE extension API `vscode.cursor.mcp.registerServer()`. That API is not reachable from the shell, from a `mcp.json` written mid-run, or from a cloud agent. `atex search`, `atex where`, `atex recall`, `atex remember`, and `atex keys` are the same tools from the shell, so they work in the session that installed atex. `atex doctor` prints the commands.

@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- `atex search`, `atex where`, `atex recall`, `atex remember`, and `atex keys` run the knowledge-base tools from the shell. A session that installed atex in the middle of a run can search, recall, and save before the next session loads the MCP server. The text matches the MCP tools. `atex doctor` and `atex install` print the commands.
+
 ## [0.4.8] — 2026-11-16
 
 ### Added
