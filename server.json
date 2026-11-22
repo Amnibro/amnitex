@@ -1,6 +1,6 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "io.github.amnibro/amnitex",
+  "name": "io.github.Amnibro/amnitex",
   "title": "AmniTeX",
   "description": "Saves context and tokens in Claude Code, Cursor and other AI coding assistants. Free and local.",
   "repository": {
