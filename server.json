@@ -1,26 +1,22 @@
 {
-  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-07-09/server.schema.json",
-  "name": "io.github.Amnibro/amnitex",
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.amnibro/amnitex",
+  "title": "AmniTeX",
   "description": "Saves context and tokens in Claude Code, Cursor and other AI coding assistants. Free and local.",
   "repository": {
     "url": "https://github.com/Amnibro/amnitex",
     "source": "github"
   },
-  "version_detail": {
-    "version": "0.4.8"
-  },
+  "version": "0.4.8",
+  "websiteUrl": "https://amni-scient.com/amnitex",
   "packages": [
     {
-      "registry_name": "mcpb",
-      "name": "https://github.com/Amnibro/amnitex/releases/latest/download/amnitex.mcpb",
-      "version": "0.4.8",
-      "runtime_hint": "native-helium",
-      "package_arguments": [
-        {
-          "type": "positional",
-          "value_hint": "serve"
-        }
-      ]
+      "registryType": "mcpb",
+      "identifier": "https://github.com/Amnibro/amnitex/releases/download/v0.4.8/amnitex.mcpb",
+      "fileSha256": "aca21272ab5fb369d961574ea67dc875ad51a47ad8455b55b6cd9fdb889b2941",
+      "transport": {
+        "type": "stdio"
+      }
     }
   ]
 }

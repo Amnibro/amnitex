@@ -254,6 +254,21 @@ HC_LIB=.helium/hc/lib .helium/build/hc build tests/atex_test.amni -o ./atex-test
 
 [`paper/atex.tex`](paper/atex.tex) — arXiv preprint draft, cs.IR + cs.CL, with the full case study of using `atex` to track context while building `atex` (see [`DOGFOOD.md`](DOGFOOD.md)).
 
+
+## Privacy Policy
+
+Amnitex runs on your computer. Amniscient does not receive your project files, conversation text, or search queries.
+
+**What it processes.** The MCP server and the `atex` CLI read the files you index (`atex init`), the facts you or the assistant store (`atex remember` / `atex_remember`), conversation turns the hooks save, and the search or recall queries the assistant sends over stdio. All of that stays on the machine that runs `atex`.
+
+**Where it is stored.** The knowledge base is a local folder: `$ATEX_DIR` if you set it, otherwise `./.atex` when that directory already exists, otherwise `~/ai/.atex` when that directory already exists, otherwise `~/.atex` (`%USERPROFILE%\.atex` on Windows). Inside it, byte pages live in `pages/`, the key index in `index.json`, and update checks in `update/` (the daily-update log is `update/log`). User-taught facts also go under `manual/`. Clearing that folder removes the store.
+
+**Client wiring.** `atex install` writes MCP server entries and hooks into the AI apps it finds on your account, such as `~/.claude.json`, `~/.cursor/mcp.json`, `~/.gemini/settings.json`, `~/.codex/config.toml`, `~/.grok/config.toml`, Windsurf's `mcp_config.json`, and Claude Desktop's config (`~/.config/Claude/`, macOS Application Support, or `%APPDATA%\Claude\` on Windows). `atex uninstall` removes that wiring.
+
+**Network.** The only network use is optional self-update. About once a day, when an AI app starts `atex serve`, atex may download `SHA256SUMS`, `SHA256SUMS.sig`, `VERSION`, and the platform binary from the GitHub Releases URL (or `$ATEX_UPDATE_URL`). It installs a new binary only when the sums file is signed by the release key built into atex, the binary matches its checksum, and `atex --selftest` passes. GitHub can see that request, the same as any other release download. There is no telemetry and no account. `atex update --off` or `ATEX_NO_UPDATE=1` turns the check off.
+
+**Contact.** [privacy@amni-scient.com](mailto:privacy@amni-scient.com). The same policy is on [amni-scient.com/privacy-amnitex](https://amni-scient.com/privacy-amnitex.html).
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
